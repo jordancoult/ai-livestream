@@ -37,8 +37,8 @@ export JOYOMNI_RECORD_DIR=${JOYOMNI_RECORD_DIR:-$W/recordings}
 export HF_HOME=$W/hf_cache
 # face++ checkpoint (2026-11-01): better human identity + motion following than 0811 in our tests
 export JOYOMNI_DIT_CKPT=${JOYOMNI_DIT_CKPT:-$JOYOMNI_CKPT_ROOT/JoyAI-Video-Edit/dit/joyai_video_edit_dit_1101_face++.pth}
-# our web-UI additions (memory panel: R-key reset, auto-reset setting); upstream file kept as index.html.orig
-HERE="$(cd "$(dirname "$0")" && pwd)"
-[ -f "$HERE/webui/patch_webui.sh" ] && JOYAI_DATA=$W bash "$HERE/webui/patch_webui.sh" || true
-[ -f "$HERE/serverpatch/patch_server.py" ] && python "$HERE/serverpatch/patch_server.py" "$J"
+# Our server changes (memory panel, no YOLO gate in near mode, runtime LoRA, speed work) are commits on the fork
+# jordancoult/JoyAI-Video-Edit, branch blackwell-realtime; setup.sh clones it (or switches an old upstream checkout).
+[ "$(git -C "$J" rev-parse --abbrev-ref HEAD 2>/dev/null)" = "blackwell-realtime" ] || \
+  echo "[run_server] WARNING: $J is not on the fork branch blackwell-realtime (run setup.sh env)" >&2
 exec bash $J/deploy/run_server.sh "$@"

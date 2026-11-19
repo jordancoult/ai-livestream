@@ -86,11 +86,11 @@ Lip-gap correlation with the driver (1 = perfect; noise ≈ ±0.15):
 - `merge_lora.py` is still correct (verified on a synthetic base) and fine for an unquantized bf16 server, with the
   caveat above.
 
-### Runtime LoRA (recommended; small server patch, not written yet)
+### Runtime LoRA (recommended; done 2026-11-04, now in the fork)
 - **What:** keep the base weights as they are (FP8 on the 5090) and add `y += scale · (x @ Aᵀ) @ Bᵀ` in bf16 next
   to each of the 320 adapted linears. Rank 32 is about 1–2% extra FLOPs, plus 336 MB of VRAM: tight but likely OK on
   32 GB, otherwise use the attention-only subset.
-- **Where:** a `cloud/pipelines/joyai/serverpatch/` hook that wraps the DiT's `img/txt_attn_qkv`, `attn_proj`,
+- **Where:** `deploy/xvideo/models/runtime_lora.py` in the fork (`jordancoult/JoyAI-Video-Edit`), hooks that wrap the DiT's `img/txt_attn_qkv`, `attn_proj`,
   `mlp.net.0.proj` and `mlp.net.2` after loading.
 - **Settings:** off by default (`JOYAI_LORA=<adapter.pt>`, `JOYAI_LORA_SCALE=1.0`). The adapter keys are
   `double_blocks.N.<module>.lora_{A,B}.weight`; scale = alpha/r = 1.

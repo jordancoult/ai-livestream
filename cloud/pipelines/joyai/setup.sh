@@ -33,7 +33,19 @@ export HF_HOME=${HF_HOME:-$W/hf_cache} UV_CACHE_DIR=/root/uv_cache UV_LINK_MODE=
 # keep the user's HF login visible even though HF_HOME moved
 [ -f /root/.cache/huggingface/token ] && [ ! -f "$HF_HOME/token" ] && mkdir -p "$HF_HOME" && cp /root/.cache/huggingface/token "$HF_HOME/token"
 mkdir -p "$W/logs" "$W/wheels" "$W/cache"
-[ -d "$W/JoyAI-Video-Edit" ] || git clone -q https://github.com/jd-opensource/JoyAI-Video-Edit.git "$W/JoyAI-Video-Edit"
+# our fork (branch blackwell-realtime = upstream + our server/speed commits); upstream stays reachable as "upstream"
+FORK=https://github.com/jordancoult/JoyAI-Video-Edit.git
+if [ ! -d "$W/JoyAI-Video-Edit" ]; then
+  git clone -q -b blackwell-realtime "$FORK" "$W/JoyAI-Video-Edit"
+  git -C "$W/JoyAI-Video-Edit" remote add upstream https://github.com/jd-opensource/JoyAI-Video-Edit.git
+elif [ "$(git -C "$W/JoyAI-Video-Edit" rev-parse --abbrev-ref HEAD)" != "blackwell-realtime" ]; then
+  # an old upstream checkout (maybe with legacy patch edits): switch it to the fork branch
+  git -C "$W/JoyAI-Video-Edit" remote get-url fork >/dev/null 2>&1 || git -C "$W/JoyAI-Video-Edit" remote add fork "$FORK"
+  git -C "$W/JoyAI-Video-Edit" fetch -q fork blackwell-realtime
+  rm -f "$W"/JoyAI-Video-Edit/deploy/static/index.html.orig "$W"/JoyAI-Video-Edit/deploy/xvideo/serving/*.py.orig \
+        "$W/JoyAI-Video-Edit/deploy/xvideo/models/runtime_lora.py"
+  git -C "$W/JoyAI-Video-Edit" checkout -q -f -B blackwell-realtime fork/blackwell-realtime
+fi
 J=$W/JoyAI-Video-Edit
 CK=$J/deploy/deps/checkpoints
 mkdir -p "$CK"

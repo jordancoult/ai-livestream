@@ -28,6 +28,8 @@ p.add_argument("--fps", type=float, default=24)
 p.add_argument("--width", type=int, default=840)
 p.add_argument("--height", type=int, default=480)
 p.add_argument("--seconds", type=float, default=40)
+p.add_argument("--clip-fps", type=float, default=None,
+               help="play the clip at this rate instead of its own (benchmark the server above the clip's fps)")
 p.add_argument("--steps", type=int, default=2)
 p.add_argument("--seed", type=int, default=42)
 p.add_argument("--quality", type=int, default=90, help="uplink JPEG quality")
@@ -115,7 +117,7 @@ async def main():
             period = 1.0 / args.fps
             while not stop.is_set() and time.time() - t_started < args.seconds:
                 # pick the source frame for "now" (loop the clip), like a live camera
-                want = int((time.time() - t_started) * src_fps)
+                want = int((time.time() - t_started) * (args.clip_fps or src_fps))
                 frame = None
                 while src_i <= want:
                     ok, frame = cap.read()

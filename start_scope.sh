@@ -19,6 +19,9 @@
 #   NETWORK=1                             allow the network (bridge mode): WebRTC over the real addresses + STUN,
 #                                         control page on 0.0.0.0 (phone on the same Wi-Fi: http://<laptop-ip>:8090/remote).
 #                                         Default: everything over 127.0.0.1, keeps running with Wi-Fi off.
+#   HW_PROFILE=5090 (or --hw 5090)        hardware profile: rented RTX 5090 (profiles/hw_5090.env: 5090 preset table and
+#                                         generation size, no CPU pinning / laptop thermal watchdog). Unset or 5080 = the
+#                                         laptop exactly as before (the profile file is never read).
 #   REMOTE_TOKEN=...                      require this token on the control page (all routes); unset = no auth.
 #                                         Read by scope_bridge.py from the environment (kept off the command line).
 #
@@ -33,7 +36,16 @@ source "$W/env.sh"
 cd "$W"
 
 BRIDGE=0
-[ "${1:-}" = "--bridge" ] && BRIDGE=1
+for _a in "$@"; do [ "$_a" = "--bridge" ] && BRIDGE=1; done
+# --- Hardware profile (default 5080 = laptop, unchanged; profiles/hw_<name>.env only for other GPUs) ---
+_prev=""; for _a in "$@"; do [ "$_prev" = "--hw" ] && HW_PROFILE="$_a"; _prev="$_a"; done
+if [ -n "${HW_PROFILE:-}" ] && [ "$HW_PROFILE" != 5080 ]; then
+  [ -f "$W/profiles/hw_$HW_PROFILE.env" ] || { echo "[scope] ERROR: unknown hardware profile $HW_PROFILE (profiles/hw_*.env)"; exit 1; }
+  source "$W/profiles/hw_$HW_PROFILE.env"
+  export HW_PROFILE   # kept across "Restart with these settings"
+  echo "[scope] hardware profile: $HW_PROFILE"
+fi
+PIN=(); [ -n "${PIN_CPUS-6-13}" ] && PIN=(taskset -c "${PIN_CPUS-6-13}")
 PORT="${PORT:-8000}"
 AUDIO_DELAY_MS="${AUDIO_DELAY_MS:-350}"
 LOG_DIR="$W/.tmp"; mkdir -p "$LOG_DIR"
@@ -50,24 +62,28 @@ trap 'exit 130' INT TERM
 
 # --- GPU / power sanity checks (ROG Zephyrus) ---
 echo "[scope] GPU: $(nvidia-smi --query-gpu=name,memory.total,temperature.gpu,power.limit --format=csv,noheader)"
+if [ -n "${HW_MIN_GPU_MB:-}" ]; then
+  _mem=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1 | tr -d ' ')
+  [ "${_mem:-0}" -ge "$HW_MIN_GPU_MB" ] || { echo "[scope] ERROR: profile $HW_PROFILE needs >= $HW_MIN_GPU_MB MiB GPU memory (found ${_mem:-?})"; exit 1; }
+fi
 command -v supergfxctl >/dev/null && echo "[scope] GPU mode: $(supergfxctl -g 2>/dev/null)"
 if command -v asusctl >/dev/null; then
   PROFILE=$(asusctl profile get 2>/dev/null | awk -F': ' '/Active profile/{print $2}')
   echo "[scope] ASUS profile: $PROFILE"
   [ "$PROFILE" != "Performance" ] && echo "[scope] WARNING: not in Performance profile (on battery?). Expect lower FPS."
 fi
-grep -q 1 /sys/class/power_supply/A*/online 2>/dev/null || echo "[scope] WARNING: running on battery."
+[ "${HW_LAPTOP_CHECKS:-1}" = 1 ] && { grep -q 1 /sys/class/power_supply/A*/online 2>/dev/null || echo "[scope] WARNING: running on battery."; }
 
 # --- Thermal watchdog, live profile: kills GPU jobs if GPU>=90C (past its 87C target, in the
 # driver slowdown zone) or CPU>=103C, sustained ~30s ---
 # pidfile check (pgrep -f could match any shell whose command line mentions the script)
-if ! kill -0 "$(cat "$W/.tmp/thermal_watchdog.pid" 2>/dev/null)" 2>/dev/null; then
+if [ "${THERMAL_WATCHDOG:-1}" = 1 ] && ! kill -0 "$(cat "$W/.tmp/thermal_watchdog.pid" 2>/dev/null)" 2>/dev/null; then
   nohup "$W/tools/thermal_watchdog.sh" 90 103 10 >/dev/null 2>&1 &
   echo "[scope] thermal watchdog started (log: .tmp/thermal.log)"
 fi
 
 # --- Virtual camera ---
-if [ ! -e /dev/video10 ]; then
+if [ "${HW_LAPTOP_CHECKS:-1}" = 1 ] && [ ! -e /dev/video10 ]; then
   echo "[scope] /dev/video10 missing; loading v4l2loopback (needs sudo)..."
   sudo modprobe v4l2loopback devices=1 video_nr=10 card_label="AI_Scope_Cam" exclusive_caps=1 \
     || echo "[scope] WARNING: could not load v4l2loopback; bridge output to /dev/video10 will fail."
@@ -129,7 +145,7 @@ fi
 if [ "$BRIDGE" = 1 ] && [ "${NETWORK:-0}" != 1 ]; then export SCOPE_WEBRTC_LOCAL=1; fi
 
 # --- Scope server (pinned to E-cores 6-13 to keep CPU package temps down) ---
-taskset -c 6-13 scope/.venv/bin/daydream-scope --host 127.0.0.1 --port "$PORT" --no-browser \
+"${PIN[@]}" scope/.venv/bin/daydream-scope --host 127.0.0.1 --port "$PORT" --no-browser \
   > "$LOG_DIR/scope-server.log" 2>&1 &
 PIDS+=($!)
 echo -n "[scope] starting server"
@@ -147,12 +163,12 @@ if [ "$BRIDGE" = 1 ]; then
   [ "${ORIENTATION:-portrait}" = landscape ] && EXTRA_ARGS+=(--landscape)
   if [ -n "${INPUT_IMAGE:-}" ]; then INPUT="$INPUT_IMAGE"; CHARACTER_REF="${CHARACTER_REF:-$INPUT_IMAGE}"; fi
   REF_ARGS=(); [ -n "${CHARACTER_REF:-}" ] && read -r -a REFS <<<"$CHARACTER_REF" && REF_ARGS=(--ref "${REFS[@]}")
-  taskset -c 6-13 scope/.venv/bin/python tools/scope_bridge.py \
+  "${PIN[@]}" scope/.venv/bin/python tools/scope_bridge.py \
     --server "http://127.0.0.1:$PORT" --input "$INPUT" --input-size "${CAMERA_SIZE:-1280x720}" \
     --output /dev/video10 --preset "${PRESET:-30}" ${NOISE_MODE:+--noise-mode "$NOISE_MODE"} \
     --pipeline "${MODEL:-streamdiffusionv2}" \
     --prompt "${PROMPT:-a stylized 3D animated character, Pixar style render}" \
-    "${REF_ARGS[@]}" "${EXTRA_ARGS[@]}" $([ "${NETWORK:-0}" = 1 ] && echo --network) ${BRIDGE_ARGS:-} &
+    "${REF_ARGS[@]}" "${EXTRA_ARGS[@]}" $([ "${NETWORK:-0}" = 1 ] && echo --network) ${HW_BRIDGE_ARGS:-} ${BRIDGE_ARGS:-} &
   PIDS+=($!)
   echo "[scope] bridge: $INPUT -> Scope (${ORIENTATION:-portrait}) -> /dev/video10 (AI_Scope_Cam)"
   echo "[scope] live controls (FPS, noise, reference, prompt): http://127.0.0.1:8090   (first ~30 s after start are slow while torch.compile warms up)"

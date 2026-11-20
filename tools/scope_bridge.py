@@ -48,6 +48,20 @@ PRESETS = {
     15: {"label": "~16 fps - pose-tracked, max realism (depth, 2 steps, random noise)", "depth_vace": True,
          "steps": [750, 400], "fixed_noise": False, "upscale": "bicubic-sharp"},
 }
+# --hw 5090 (start_scope.sh --hw 5090): LongLive-family preset table for a rented RTX 5090, at 768x432 by default.
+# Measured 2026-11-20 (experiments/2026-11-20-ll1-5090) at 768x432, 12-frame chunks, fp8, compiled: live fps (model-only
+# fps in brackets). Laptop reference: pure-worlds 576x320 2 steps = 20.4 fps live, 1.66 s.
+# Same keys/labels scheme as PRESETS so the slider page and saves work unchanged; the laptop table is untouched.
+PRESETS_5090_LL = {
+    30: {"label": "30 fps - 2 steps", "depth_vace": False, "steps": [750, 400], "fixed_noise": False,
+         "upscale": "bicubic-sharp"},
+    24: {"label": "~25 fps - 3 steps", "depth_vace": False, "steps": [750, 500, 250], "fixed_noise": False,
+         "upscale": "bicubic-sharp"},
+    20: {"label": "~20 fps - world detail (4 steps)", "depth_vace": False, "steps": [750, 600, 400, 200],
+         "fixed_noise": False, "upscale": "bicubic-sharp"},
+    15: {"label": "~22 fps - you in the world (depth, 2 steps)", "depth_vace": True, "steps": [750, 400],
+         "fixed_noise": False, "upscale": "bicubic-sharp"},
+}
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--server", default="http://127.0.0.1:8000")
@@ -91,7 +105,16 @@ parser.add_argument("--duration", type=float, default=0, help="Stop after N seco
 parser.add_argument("--no-load", action="store_true", help="Skip pipeline load (already loaded)")
 parser.add_argument("--memory-window", type=int, default=None,
                     help="LongLive 2.0: memory window in latent frames (8-32, default 24; applied at load)")
+parser.add_argument("--hw", default="5080", choices=["5080", "5090"],
+                    help="Hardware profile: 5080 = laptop (default, unchanged); 5090 = rented RTX 5090 (LongLive presets, 768x432)")
 args = parser.parse_args()
+# LongLive family on a 5090: its own preset table and size (default 5080 never enters this)
+HW_LL = args.hw == "5090" and args.pipeline in LL_FAMILY and args.pipeline not in TEXT_MODELS
+if HW_LL:
+    PRESETS.clear()
+    PRESETS.update(PRESETS_5090_LL)
+    if args.size == [576, 320]:
+        args.size = [768, 432]
 IMAGE_INPUT = Path(args.input).suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 TEXT_MODEL = args.pipeline in TEXT_MODELS
 if TEXT_MODEL and args.size == [576, 320]:
@@ -189,6 +212,8 @@ def load_start_image(name: str):
 
 def effective_depth(preset: int) -> bool:
     if args.pipeline != "streamdiffusionv2":
+        if HW_LL and state["depth"] is None:
+            return PRESETS[preset]["depth_vace"]  # 5090 table: the depth preset turns it on
         return bool(state["depth"])  # LongLive: depth only when switched on explicitly (presets keep it off)
     return PRESETS[preset]["depth_vace"] if state["depth"] is None else state["depth"]
 
@@ -210,7 +235,8 @@ def launch_settings() -> dict:
     """Settings that only change on restart: start_scope.sh env vars and bridge load arguments."""
     return {"env": {k: os.environ.get(k) for k in LAUNCH_ENV}, "model": args.pipeline, "size": [H, W],
             "vae": args.vae or ("lighttae" if args.pipeline in LL_FAMILY else "tae"), "seed": args.seed,
-            "input_size": args.input_size, "memory_window": args.memory_window}
+            "input_size": args.input_size, "memory_window": args.memory_window,
+            **({"hw": args.hw} if args.hw != "5080" else {})}
 
 
 def attention_weights() -> dict:
@@ -951,6 +977,8 @@ async def main() -> None:
                 mismatch = []
                 if launch.get("model") and launch["model"] != args.pipeline:
                     mismatch.append(f"model {launch['model']}")
+                if launch.get("hw", "5080") != args.hw:
+                    mismatch.append(f"hardware profile {launch.get('hw', '5080')}")
                 if launch.get("size") and sorted(launch["size"]) != sorted([H, W]):
                     mismatch.append(f"size {launch['size'][0]}x{launch['size'][1]}")
                 print(f"[bridge] loaded settings ({d.get('name') or d.get('exported_at') or 'file'})"

@@ -2,6 +2,9 @@
 
 Usage: python tools/bench_longlive.py [--steps 750 400] [--profile] [--block-timing] [--out out.mp4]
 Env flags (SCOPE_FP8_ROWWISE, SCOPE_NOISE_T_OFFSET, ...) behave as in start_scope.sh.
+The output covers input frames 0..N in order (warm-up chunks included), so it is frame-aligned with the input clip
+for tools/quality_metrics.py (--save-input writes the matching resized input). --depth = the live depth->VACE path,
+--ref "" = prompt only (the "worlds" saves).
 """
 
 import argparse
@@ -26,6 +29,9 @@ parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--chunks", type=int, default=30, help="Timed chunks after warm-up")
 parser.add_argument("--profile", action="store_true")
 parser.add_argument("--block-timing", action="store_true", help="GPU time per pipeline block (syncs)")
+parser.add_argument("--depth", action="store_true", help="depth -> VACE (the bridge's depth presets)")
+parser.add_argument("--depth-stride", type=int, default=4)
+parser.add_argument("--save-input", default=None, help="Also write the resized input frames that were used (.mp4)")
 parser.add_argument("--out", default=None)
 parser.add_argument("--tag", default="")
 args = parser.parse_args()
@@ -69,16 +75,31 @@ if args.out:
                                "-preset", "veryfast", "-pix_fmt", "yuv420p", args.out], stdin=subprocess.PIPE)
 
 
+in_writer = None
+if args.save_input:
+    import subprocess
+
+    in_writer = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                                  "-s", f"{w}x{h}", "-r", "30", "-i", "-", "-c:v", "libx264", "-crf", "16",
+                                  "-preset", "veryfast", "-pix_fmt", "yuv420p", args.save_input], stdin=subprocess.PIPE)
+
+
 def run(i, first=False):
     s = i * chunk % (video.shape[2] - chunk)
+    if in_writer is not None:
+        u8 = ((video[0, :, s:s + chunk].float().permute(1, 2, 3, 0) + 1) * 127.5).round().clamp(0, 255).to(torch.uint8)
+        in_writer.stdin.write(u8.contiguous().cpu().numpy().tobytes())
     kw = {"video": video[:, :, s:s + chunk], "prompts": prompts, "denoising_step_list": args.steps,
           "noise_scale": args.noise_scale, "noise_controller": False, "vace_use_input_video": False,
           "clean_kv_every": args.clean_every}
-    if first and args.ref:
+    if args.depth:
+        kw.update(depth_vace=True, depth_stride=args.depth_stride)
+    if first and args.ref:  # --ref "" = prompt only
         kw["vace_ref_images"] = [args.ref]
     out = pipe(**kw)["video"]
     if writer is not None:
-        u8 = (out.float().clamp(0, 1) * 255).to(torch.uint8)
+        # LongLive returns CPU uint8 [T, H, W, 3] since the 2026-11-01 output fix; older pipelines float 0..1
+        u8 = out if out.dtype == torch.uint8 else (out.float().clamp(0, 1) * 255).to(torch.uint8)
         writer.stdin.write(u8.contiguous().cpu().numpy().tobytes())
     return out.shape[0]
 
@@ -96,13 +117,16 @@ for i in range(warm, warm + args.chunks):
     torch.cuda.synchronize()
     times.append(time.perf_counter() - t)
 
-if writer is not None:
-    writer.stdin.close()
-    writer.wait()
+for wr in (writer, in_writer):
+    if wr is not None:
+        wr.stdin.close()
+        wr.wait()
 
 total = sum(times)
-res = {"tag": args.tag, "pipeline": args.pipeline, "steps": args.steps, "chunk_frames": chunk,
+res = {"tag": args.tag, "pipeline": args.pipeline, "size": [h, w], "steps": args.steps, "depth": args.depth,
+       "noise": args.noise_scale, "clean_every": args.clean_every, "chunk_frames": chunk,
        "fps": round(frames / total, 2), "chunk_ms": round(1000 * total / len(times), 1),
+       "chunk_ms_p95": round(1000 * sorted(times)[int(0.95 * (len(times) - 1))], 1),
        "peak_vram_gb": round(torch.cuda.max_memory_allocated() / 1e9, 2), "load_s": round(load_s, 1)}
 print("RESULT " + json.dumps(res))
 if block_gpu:

@@ -12,8 +12,11 @@ Metrics (per output clip):
   adhere    depth-map correlation with the input (follows your pose/framing); higher is better
   drift     adherence in the first third minus the last third (long-term drift); lower is better
   score     weighted total (realism counts most)
+  prompt    (only with QM_PROMPT="..."): CLIP image-text similarity to that prompt (does it show the world you asked
+            for?), x100; reported next to the score, not part of it
 """
 
+import os
 import sys
 
 import av
@@ -89,6 +92,15 @@ class Realism:
         probs = logits.view(len(idx), len(self.PAIRS), 2).softmax(-1)[..., 0]  # P(positive) per pair
         return probs.mean().item()
 
+    @torch.no_grad()
+    def prompt_sim(self, x, prompt):
+        idx = torch.linspace(0, x.shape[0] - 1, 24).long()
+        inp = self.proc(images=list(x[idx].permute(0, 2, 3, 1).numpy()), return_tensors="pt").to(DEV)
+        f = F.normalize(self.model.get_image_features(pixel_values=inp["pixel_values"].half()).float(), dim=-1)
+        tok = self.proc(text=[prompt], return_tensors="pt", padding=True).to(DEV)
+        t = F.normalize(self.model.get_text_features(**tok).float(), dim=-1)
+        return 100 * (f @ t.T).mean().item()
+
 
 def adherence_series(x_in, x_out):
     from scope.core.pipelines.video_depth_anything.gpu_depth import GpuStreamingDepth
@@ -114,6 +126,7 @@ def main():
     x_in = load(inp)
     m_in = motion(x_in)
     realism = Realism()
+    qm_prompt = os.environ.get("QM_PROMPT", "").strip()
     rows = []
     for path in outs:
         x = load(path)
@@ -128,10 +141,13 @@ def main():
         r = realism(x)
         fl = flicker(x)
         score = 3.0 * r - 8.0 * spur - 10.0 * fl + 1.0 * adh.mean().item() - 1.0 * max(0.0, drift)
-        rows.append((score, path, r, spur, fl, adh.mean().item(), drift))
-    print(f"{'clip':34s} {'score':>6s} {'realism':>8s} {'spurious':>9s} {'flicker':>8s} {'adhere':>7s} {'drift':>6s}")
-    for score, path, r, spur, fl, adh, drift in sorted(rows, reverse=True):
-        print(f"{path[-34:]:34s} {score:6.3f} {r:8.3f} {spur:9.4f} {fl:8.4f} {adh:7.3f} {drift:6.3f}")
+        ps = realism.prompt_sim(x, qm_prompt) if qm_prompt else float("nan")
+        rows.append((score, path, r, spur, fl, adh.mean().item(), drift, ps))
+    print(f"{'clip':34s} {'score':>6s} {'realism':>8s} {'spurious':>9s} {'flicker':>8s} {'adhere':>7s} {'drift':>6s}"
+          + (f" {'prompt':>6s}" if qm_prompt else ""))
+    for score, path, r, spur, fl, adh, drift, ps in sorted(rows, reverse=True):
+        print(f"{path[-34:]:34s} {score:6.3f} {r:8.3f} {spur:9.4f} {fl:8.4f} {adh:7.3f} {drift:6.3f}"
+              + (f" {ps:6.2f}" if qm_prompt else ""))
     print(f"(input reference: spurious {m_in[m_in < torch.quantile(m_in, 0.4)].mean():.4f}, flicker {flicker(x_in):.4f})")
 
 

@@ -12,7 +12,7 @@ cd /workspace/ail && bash cloud/pipelines/longlive1/setup_box.sh    # uv sync (t
 HF_HUB_ENABLE_HF_TRANSFER=0 bash cloud/pipelines/longlive1/models_box.sh   # LongLive, Wan VAE/T5, VACE, TAEs, depth, CLIP
 ```
 Then `./start_scope.sh --hw 5090` (server) and the bridge with `--hw 5090`. The profile:
-- uses the 5090 preset table (768×432);
+- uses the 5090 preset table (native 832×480);
 - skips the laptop-only parts: CPU pinning, thermal watchdog, battery/v4l2 checks.
 
 ## Measuring (all run on the box, from /workspace/ail)

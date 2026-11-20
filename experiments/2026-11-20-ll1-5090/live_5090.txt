@@ -21,3 +21,21 @@
 [bridge] output  30.1 fps (~25 fps - clean (2 steps, fixed noise))
 == hw15
 [bridge] output  23.6 fps (~22 fps - you in the world (depth, 2 steps))
+== lat_n3
+[latency] summary: n=13 median(all) 1688 ms, median(after warm-up) 1682 ms, min 1664 ms, max 3225 ms
+[smooth] frame gap median 46.9 ms, p95 59.9 ms, max 337 ms, stutters(>66ms) 12 / 1168
+[bridge] output  21.0 fps (~25 fps - clean (2 steps, fixed noise))
+== fps_n3
+[smooth] frame gap median 47.8 ms, p95 60.1 ms, max 72 ms, stutters(>66ms) 12 / 1388
+[bridge] output  20.8 fps (~25 fps - clean (2 steps, fixed noise))
+== lat_n2d
+[latency] summary: n=12 median(all) 1806 ms, median(after warm-up) 1784 ms, min 1772 ms, max 3062 ms
+[smooth] frame gap median 50.3 ms, p95 60.9 ms, max 72 ms, stutters(>66ms) 8 / 988
+[bridge] output  19.8 fps (~25 fps - clean (2 steps, fixed noise))
+== lat_n2
+[latency] summary: n=15 median(all) 1310 ms, median(after warm-up) 1310 ms, min 1284 ms, max 1355 ms
+[smooth] frame gap median 36.1 ms, p95 46.9 ms, max 60 ms, stutters(>66ms) 0 / 1853
+[bridge] output  27.2 fps (~25 fps - clean (2 steps, fixed noise))
+== hw20
+[smooth] frame gap median 47.3 ms, p95 59.7 ms, max 88 ms, stutters(>66ms) 6 / 703
+[bridge] output  21.0 fps (~21 fps - best world (3 steps))

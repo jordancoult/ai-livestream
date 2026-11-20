@@ -1,5 +1,8 @@
 # LongLive 1 on a rented RTX 5090: best config (2026-11-20)
 
+**Answer:** native 832×480, 3 steps, stock memory, fp8, `lighttae` = laptop fps and latency (21 fps, 1.68 s) with a far
+sharper world. Use `./start_scope.sh --hw 5090`, preset 20; depth presets 15/24 keep you recognisable in the world.
+
 The question: what's the best LongLive 1 setup on the cloud 5090 for the high-noise "worlds" use? That's webcam
 pose/appearance at noise 0.85–1.0, prompt only, like the saves `pure-worlds` and `interactive-worlds-2`. It used the
 laptop stack (Scope fork + bridge + patches) unchanged.
@@ -47,13 +50,39 @@ Live through Scope + bridge (latency = flash in → flash out, including the 14-
   - bf16 instead of fp8: no better, 32% slower;
   - fused KV: bit-identical output, no speed gain on the 5090.
 
-## Chosen 5090 presets (`scope_bridge.py --hw 5090`, 768×432)
+## Follow-up: native resolution, longer memory, better decoder (same day)
+- **Native 832×480 is the sharpest by eye.** Compared as full-resolution crops at the 720×1280 output size:
+  - 3 steps gives distinct towers, street grids and lights;
+  - 2 steps adds a little ghosting;
+  - 768×432 has a streaky "glitch" texture.
+  `quality_metrics.py` scores at 320×576, so it can't see this. Its slight preference for 768 isn't a quality signal.
+- **Longer memory is worse** (`SCOPE_LOCAL_ATTN_SIZE`, stock 12 latent frames ≈ 1.6 s; see
+  `quality_scores_native.txt`):
+  - Scores fall from 12 to 18 to 24 at 2 and 3 steps, with more invented motion and lower realism.
+  - By eye, window 24 goes blurry, streaky and darker after about 15 s while 12 stays crisp. The model was trained at
+    12.
+  - It also costs speed: 18 frames −16%, 24 frames −28%; +1.7 GB VRAM per 6 frames.
+- **Full decoder:** the Wan VAE and `lightvae` look the same as `lighttae` at native size. The Wan VAE halves the fps
+  (9.9), `lightvae` costs 11%. Keep `lighttae`.
+- **So the spare VRAM has no quality use** for LongLive 1 here; the 5090's headroom is best spent on resolution and
+  steps.
+- **Depth at native:** 3 steps isn't better than 2 (score 2.40 vs 2.48) and drops to 15 fps.
+
+Live at native 832×480 (laptop `pure-worlds` reference: 20.4 fps, 1.66 s):
+
+| Steps | Live fps | Latency |
+|---|---|---|
+| **3** | 20.8–21.0 | 1.68 s |
+| 2 | 27.2 | 1.31 s |
+| 2 + depth | 19.8 | 1.78 s |
+
+## Chosen 5090 presets (`scope_bridge.py --hw 5090`, native 832×480)
 | Slider | Steps | Depth | Live fps |
 |---|---|---|---|
-| 30 | 2 | off | 30 |
-| 24 | 3 | off | ~25 (model 26.9) |
-| 20 | 4 — world detail | off | ~20.6 |
-| 15 | 2 — you in the world | on | ~22 |
+| 30 | 2 | off | 27.2 |
+| 24 | 1, fast "you in the world" | on | ~25 (model 27.6) |
+| **20** | **3, best world** (laptop fps and latency) | off | **21.0** |
+| 15 | 2, "you in the world" | on | 19.8 |
 
 The laptop table and behaviour are unchanged, checked by launching `start_scope.sh` without the flag:
 - same CPU pinning, threads and PRIME env;

@@ -33,7 +33,7 @@ input at the clip's 24 fps, so earlier "26 fps" figures were input-bound.
 |---|---|---|---|
 | upstream | 25.8 fps | 26.6 fps | 0.53–0.60 s |
 | fork (default) | 27.3–27.7 fps | 27.3 fps | 0.51–0.55 s |
-| fork + `"backpressure": "hold"` | 28.2 fps | 28.3–28.8 fps | 0.68–0.72 s |
+| ~~fork + `"backpressure": "hold"`~~ (rejected: over the 0.55 s budget) | 28.2 fps | 28.3–28.8 fps | 0.68–0.72 s |
 
 **Fork speed commits** (all lossless: `bench/parity.py` shows a real-size DiT block is bit-identical to upstream):
 - one K/V concat per layer and step instead of two;
@@ -52,10 +52,13 @@ chunk:
 **Frame admission:**
 - With the default 2 chunks in flight, camera frames that arrive while the pipeline is full are dropped. The DiT then
   idles about 40 ms per chunk waiting for 8 fresh frames.
-- `"backpressure": "hold"` keeps the newest 7 frames instead, so the next chunk starts at once: +1.5–2 fps, +0.17 s
-  latency. Set it per session (bridge: `--extra '{"backpressure": "hold"}'`) or server-wide with
-  `JOYOMNI_BACKPRESSURE=hold`. It's off by default.
-- `max_inflight_chunks` 3 is worse on both counts (28.0 fps, 0.76 s).
+- **Latency budget: 0.55 s (owner's rule). Keep the defaults.** Two options trade latency for fps and are rejected
+  for going over it:
+  - `"backpressure": "hold"` keeps the newest 7 frames so the next chunk starts at once: +1.5–2 fps but 0.68–0.72 s.
+    It stays in the fork, off by default;
+  - `max_inflight_chunks` 3: 28.0 fps, 0.76 s.
+- Any fps gained by queueing work ahead of the DiT costs exactly that queue's wait in latency, so a future speedup
+  has to come from less GPU work per chunk.
 
 **Not worth it:** CUDA graph off (same fps). **Lossless headroom left:** small, a few % (VAE convs run cuDNN sm80
 kernels; q/k copies). Bigger gains need lossy changes (NVFP4, fewer tokens or steps) or a faster GPU.

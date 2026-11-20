@@ -26,23 +26,39 @@ own clients.
 | `experiments/` | Dated runs with FINDINGS.md (videos are gitignored) |
 
 ## Speed on the RTX 5090 (2026-11-19, `bench/`)
-Measured box-local (`bench/bench_box.sh`, input faster than real time; the old `joyai_client.py` capped input at the
-clip's 24 fps, so earlier "26 fps" figures were input-bound):
-- **Upstream: 25.8 fps**, 0.60 s server latency. **Fork: 27.1–27.7 fps**, 0.54 s, with **bit-identical output**
-  (`bench/parity.py`):
-  - one K/V concat per layer and step instead of two;
-  - FP8 GEMM tiles re-tuned for the 5090.
-- **Where the time goes:** the GPU is saturated; the pipeline stages already overlap on separate CUDA streams. Per
-  8-frame chunk, ~325 ms of GPU work:
-  - FP8 GEMMs ~142 ms. JD's Triton kernel runs at 450–600 TFLOPS, faster than cuBLAS and near the card's limit;
-  - VAE convs ~65 ms;
-  - attention ~31 ms;
-  - other DiT ops ~50 ms (copies, quant, adaLN, GELU, gated residual; most are already fused by `joyomni_ops`).
-- **Settings that don't help:**
-  - `max_inflight_chunks` 4: +1.7 fps, but 2× the latency;
-  - CUDA graph off: same fps (launch overhead isn't the limit).
-- **Lossless headroom left:** about 5–8%, by fusing the remaining small ops (GELU into the FP8 quant, q/k copies,
-  gated residual + norm). Bigger gains need lossy changes (NVFP4, fewer tokens or steps) or faster hardware.
+Measured box-local with `bench/bench_box.sh`, input fed faster than real time. The old `joyai_client.py` capped
+input at the clip's 24 fps, so earlier "26 fps" figures were input-bound.
+
+| | 40 fps input | 30 fps input (webcam-like) | server latency |
+|---|---|---|---|
+| upstream | 25.8 fps | 26.6 fps | 0.53–0.60 s |
+| fork (default) | 27.3–27.7 fps | 27.3 fps | 0.51–0.55 s |
+| fork + `"backpressure": "hold"` | 28.2 fps | 28.3–28.8 fps | 0.68–0.72 s |
+
+**Fork speed commits** (all lossless: `bench/parity.py` shows a real-size DiT block is bit-identical to upstream):
+- one K/V concat per layer and step instead of two;
+- FP8 GEMM tiles re-tuned for the 5090;
+- adaLN norm kernel reads the per-sample scale/shift directly instead of expanded [tokens, D] copies (22 → 8 µs per
+  call; JIT-built once per GPU, about 40 s, into the compile cache);
+- GELU fused into the FP8 quant of each MLP down-projection (exhaustively checked over all bf16 values).
+
+**Where the time goes:** the GPU is saturated; the stages already overlap on separate CUDA streams. Per 8-frame
+chunk:
+- FP8 GEMMs ~140 ms. JD's Triton kernel runs at 450–600 TFLOPS, faster than cuBLAS and near the card's limit;
+- VAE ~65–80 ms;
+- attention ~31 ms;
+- the rest ~40 ms.
+
+**Frame admission:**
+- With the default 2 chunks in flight, camera frames that arrive while the pipeline is full are dropped. The DiT then
+  idles about 40 ms per chunk waiting for 8 fresh frames.
+- `"backpressure": "hold"` keeps the newest 7 frames instead, so the next chunk starts at once: +1.5–2 fps, +0.17 s
+  latency. Set it per session (bridge: `--extra '{"backpressure": "hold"}'`) or server-wide with
+  `JOYOMNI_BACKPRESSURE=hold`. It's off by default.
+- `max_inflight_chunks` 3 is worse on both counts (28.0 fps, 0.76 s).
+
+**Not worth it:** CUDA graph off (same fps). **Lossless headroom left:** small, a few % (VAE convs run cuDNN sm80
+kernels; q/k copies). Bigger gains need lossy changes (NVFP4, fewer tokens or steps) or a faster GPU.
 
 ## G-Star detail LoRA (optional, off by default)
 Adapters from `training/` (better G-Star skin/hat detail; mouth unchanged; `cloud/docs/gstar-lora-finetune.md`).

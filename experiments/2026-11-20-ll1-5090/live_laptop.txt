@@ -1,0 +1,5 @@
+== laptop lat
+[latency] summary: n=15 median(all) 1664 ms, median(after warm-up) 1657 ms, min 1605 ms, max 2810 ms
+[smooth] frame gap median 47.0 ms, p95 50.7 ms, max 74 ms, stutters(>66ms) 5 / 1363
+== laptop fps
+[smooth] frame gap median 48.5 ms, p95 50.9 ms, max 70 ms, stutters(>66ms) 3 / 1382

@@ -1,0 +1,19 @@
+s576_1 --size 576 320 --steps 750
+s576_2 --size 576 320 --steps 750 400
+s576_3 --size 576 320 --steps 750 500 250
+s576_4 --size 576 320 --steps 750 600 400 200
+s768_1 --size 768 432 --steps 750
+s768_2 --size 768 432 --steps 750 400
+s768_3 --size 768 432 --steps 750 500 250
+s768_4 --size 768 432 --steps 750 600 400 200
+s832_1 --size 832 480 --steps 750
+s832_2 --size 832 480 --steps 750 400
+s832_3 --size 832 480 --steps 750 500 250
+s832_4 --size 832 480 --steps 750 600 400 200
+s960_1 --size 960 544 --steps 750
+s960_2 --size 960 544 --steps 750 400
+s768_2_d --size 768 432 --steps 750 400 --depth
+s768_1_d --size 768 432 --steps 750 --depth
+s832_2_d --size 832 480 --steps 750 400 --depth
+s832_1_d --size 832 480 --steps 750 --depth
+s576_2_d --size 576 320 --steps 750 400 --depth

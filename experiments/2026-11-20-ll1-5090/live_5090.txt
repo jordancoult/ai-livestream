@@ -1,0 +1,23 @@
+== lat_576_2
+[latency] summary: n=15 median(all) 1093 ms, median(after warm-up) 1093 ms, min 1077 ms, max 1116 ms
+[smooth] frame gap median 33.5 ms, p95 39.5 ms, max 47 ms, stutters(>66ms) 0 / 2065
+[bridge] output  30.0 fps (~25 fps - clean (2 steps, fixed noise))
+== lat_768_4
+[latency] summary: n=15 median(all) 1680 ms, median(after warm-up) 1671 ms, min 1641 ms, max 1750 ms
+[smooth] frame gap median 47.4 ms, p95 54.7 ms, max 297 ms, stutters(>66ms) 2 / 1392
+[bridge] output  18.5 fps (~25 fps - clean (2 steps, fixed noise))
+== lat_768_2d
+[latency] summary: n=14 median(all) 1551 ms, median(after warm-up) 1545 ms, min 1511 ms, max 2453 ms
+[smooth] frame gap median 43.8 ms, p95 52.5 ms, max 73 ms, stutters(>66ms) 2 / 1394
+[bridge] output  23.1 fps (~25 fps - clean (2 steps, fixed noise))
+== fps_768_4
+[smooth] frame gap median 49.2 ms, p95 58.5 ms, max 69 ms, stutters(>66ms) 6 / 1351
+[bridge] output  20.6 fps (~25 fps - clean (2 steps, fixed noise))
+== fps_768_2d
+[smooth] frame gap median 44.7 ms, p95 56.1 ms, max 75 ms, stutters(>66ms) 3 / 1488
+[bridge] output  20.8 fps (~25 fps - clean (2 steps, fixed noise))
+== live_laptop576_2
+[smooth] frame gap median 33.4 ms, p95 40.0 ms, max 50 ms, stutters(>66ms) 0 / 1889
+[bridge] output  30.1 fps (~25 fps - clean (2 steps, fixed noise))
+== hw15
+[bridge] output  23.6 fps (~22 fps - you in the world (depth, 2 steps))

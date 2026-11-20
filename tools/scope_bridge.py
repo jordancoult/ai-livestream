@@ -48,19 +48,19 @@ PRESETS = {
     15: {"label": "~16 fps - pose-tracked, max realism (depth, 2 steps, random noise)", "depth_vace": True,
          "steps": [750, 400], "fixed_noise": False, "upscale": "bicubic-sharp"},
 }
-# --hw 5090 (start_scope.sh --hw 5090): LongLive-family preset table for a rented RTX 5090, at 768x432 by default.
-# Measured 2026-11-20 (experiments/2026-11-20-ll1-5090) at 768x432, 12-frame chunks, fp8, compiled: live fps (model-only
-# fps in brackets). Laptop reference: pure-worlds 576x320 2 steps = 20.4 fps live, 1.66 s.
-# Same keys/labels scheme as PRESETS so the slider page and saves work unchanged; the laptop table is untouched.
+# --hw 5090 (start_scope.sh --hw 5090): LongLive-family preset table for a rented RTX 5090, at native 832x480 (the
+# trained size: sharpest by eye). Measured 2026-11-20 (experiments/2026-11-20-ll1-5090), 12-frame chunks, stock 12-frame
+# memory (longer is worse), fp8, lighttae (full VAE: same look, half speed). Live fps / latency; laptop reference:
+# pure-worlds 576x320 2 steps = 20.4 fps, 1.66 s. Same keys/labels scheme as PRESETS (page + saves unchanged).
 PRESETS_5090_LL = {
-    30: {"label": "30 fps - 2 steps", "depth_vace": False, "steps": [750, 400], "fixed_noise": False,
-         "upscale": "bicubic-sharp"},
-    24: {"label": "~25 fps - 3 steps", "depth_vace": False, "steps": [750, 500, 250], "fixed_noise": False,
-         "upscale": "bicubic-sharp"},
-    20: {"label": "~20 fps - world detail (4 steps)", "depth_vace": False, "steps": [750, 600, 400, 200],
-         "fixed_noise": False, "upscale": "bicubic-sharp"},
-    15: {"label": "~22 fps - you in the world (depth, 2 steps)", "depth_vace": True, "steps": [750, 400],
-         "fixed_noise": False, "upscale": "bicubic-sharp"},
+    30: {"label": "~27 fps - 2 steps", "depth_vace": False, "steps": [750, 400], "fixed_noise": False,
+         "upscale": "bicubic-sharp"},                                                     # 27.2 fps, 1.31 s
+    24: {"label": "~25 fps - you in the world, fast (depth, 1 step)", "depth_vace": True, "steps": [750],
+         "fixed_noise": False, "upscale": "bicubic-sharp"},                               # model 27.6 fps
+    20: {"label": "~21 fps - best world (3 steps)", "depth_vace": False, "steps": [750, 500, 250],
+         "fixed_noise": False, "upscale": "bicubic-sharp"},                               # 20.9 fps, 1.68 s
+    15: {"label": "~20 fps - you in the world (depth, 2 steps)", "depth_vace": True, "steps": [750, 400],
+         "fixed_noise": False, "upscale": "bicubic-sharp"},                               # 19.8 fps, 1.78 s
 }
 
 parser = argparse.ArgumentParser()
@@ -106,7 +106,7 @@ parser.add_argument("--no-load", action="store_true", help="Skip pipeline load (
 parser.add_argument("--memory-window", type=int, default=None,
                     help="LongLive 2.0: memory window in latent frames (8-32, default 24; applied at load)")
 parser.add_argument("--hw", default="5080", choices=["5080", "5090"],
-                    help="Hardware profile: 5080 = laptop (default, unchanged); 5090 = rented RTX 5090 (LongLive presets, 768x432)")
+                    help="Hardware profile: 5080 = laptop (default, unchanged); 5090 = rented RTX 5090 (LongLive presets, 832x480)")
 args = parser.parse_args()
 # LongLive family on a 5090: its own preset table and size (default 5080 never enters this)
 HW_LL = args.hw == "5090" and args.pipeline in LL_FAMILY and args.pipeline not in TEXT_MODELS
@@ -114,7 +114,7 @@ if HW_LL:
     PRESETS.clear()
     PRESETS.update(PRESETS_5090_LL)
     if args.size == [576, 320]:
-        args.size = [768, 432]
+        args.size = [832, 480]
 IMAGE_INPUT = Path(args.input).suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 TEXT_MODEL = args.pipeline in TEXT_MODELS
 if TEXT_MODEL and args.size == [576, 320]:

@@ -26,6 +26,7 @@ start_server
 SIG=$(server_sig)
 while true; do
   touch /workspace/.heartbeat
+  echo "${ORIENTATION:-portrait}" > .tmp/relay_orientation   # the laptop relay crops the camera to match
   ( source env.sh; source profiles/hw_5090.env
     REF=(); [ -n "${CHARACTER_REF:-}" ] && read -r -a REFS <<<"$CHARACTER_REF" && REF=(--ref "${REFS[@]}")
     exec scope/.venv/bin/python tools/scope_bridge.py --server http://127.0.0.1:8000 --pipeline longlive --hw 5090 \

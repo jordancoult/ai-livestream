@@ -456,6 +456,13 @@ class CropResizeTrack(MediaStreamTrack):
 STREAM_OUT = args.output.startswith(("tcp://", "udp://", "srt://"))
 STREAM_IN = args.input.startswith(("tcp://", "udp://", "srt://"))
 input_ended = {"ev": None}  # cloud relay: the camera stream ended -> end this bridge run (the box script restarts it)
+if STREAM_IN:  # cloud relay: tell the laptop how to crop the camera (portrait 9:16 / landscape 16:9); read on each reconnect
+    try:
+        (Path(__file__).resolve().parents[1] / ".tmp").mkdir(exist_ok=True)
+        (Path(__file__).resolve().parents[1] / ".tmp" / "relay_orientation").write_text(
+            "landscape\n" if args.landscape else "portrait\n")
+    except OSError:
+        pass
 
 
 class _StreamOutput:

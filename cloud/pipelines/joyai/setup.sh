@@ -97,7 +97,8 @@ envsetup() {
   nvcc --version | grep release
   [ -x /root/venv/bin/python ] || uv venv -q /root/venv --python 3.12
   source /root/venv/bin/activate
-  uv pip install -q -r "$J/deploy/requirements.txt" pip setuptools wheel "huggingface_hub[hf_transfer]"
+  # requirements.txt mixes the cu128 torch index with PyPI; uv would otherwise take e.g. an old requests from the torch index
+  uv pip install -q --index-strategy unsafe-best-match -r "$J/deploy/requirements.txt" pip setuptools wheel "huggingface_hub[hf_transfer]"
   export TORCH_CUDA_ARCH_LIST=12.0
   # kernel wheels: from artifacts if present, else build once (cached in $W/wheels)
   if ! ls "$W"/wheels/sageattention-*.whl >/dev/null 2>&1; then

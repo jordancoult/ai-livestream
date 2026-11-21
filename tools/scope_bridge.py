@@ -977,6 +977,14 @@ async def main() -> None:
                     name = Path(body["start"] or "").name
                     state["start"] = name if name and (ASSETS / name).is_file() else None
                     update = preset_params(state["preset"], with_ref=True)  # re-seed the sink now
+                # A step-list change (and an instant prompt change) makes Scope reset its cache, which drops the VACE
+                # reference (encoded once per reset, sent one-shot): send those as a full reset that re-sends the ref
+                # (+ start image), otherwise the reference wire stays "connected" but stops having any effect.
+                if update and state["ref"] and "vace_ref_images" not in update and (
+                        "denoising_step_list" in update or ("prompts" in update and not state["transition_steps"])):
+                    full = preset_params(state["preset"], with_ref=True)
+                    full.update(update)
+                    update = full
                 if update:
                     send(update)
                 print(f"[bridge] params -> {body}", flush=True)
@@ -1164,6 +1172,18 @@ async def main() -> None:
         except asyncio.TimeoutError:
             pass
         finally:
+            if STREAM_IN or STREAM_OUT:  # cloud relay: keep the live settings for the next connection (live_cloud.sh)
+                try:
+                    (TMP / "live_state.json").write_text(json.dumps({k: state[k] for k in OVERRIDES}))
+                    ba = [f"--size {H} {W}"] + (["--text-only"] if args.text_only else []) + \
+                         ([f"--vae {args.vae}"] if args.vae else []) + ([f"--seed {args.seed}"] if args.seed is not None else [])
+                    keep = {"PRESET": str(state["preset"]), "NOISE_MODE": state["noise_mode"], "PROMPT": state["prompt"],
+                            "CHARACTER_REF": " ".join(f"assets/{Path(r).name}" for r in state["ref"]),
+                            "ORIENTATION": "landscape" if args.landscape else "portrait", "BRIDGE_ARGS": " ".join(ba),
+                            "INPUT_IMAGE": args.input if IMAGE_INPUT else ""}
+                    (TMP / "live_state.env").write_text("".join(f"{k}={shlex.quote(v)}\n" for k, v in keep.items()))
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[bridge] could not save live settings: {exc!r}", flush=True)
             try:
                 await client.delete(f"/api/v1/webrtc/offer/{session_id}")
             except httpx.HTTPError:

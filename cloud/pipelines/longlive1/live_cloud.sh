@@ -24,6 +24,8 @@ stop_server() {
 }
 start_server
 SIG=$(server_sig)
+# resume the last session's settings (saved by the bridge when a connection ends)
+if [ -f .tmp/live_state.env ]; then set -a; source .tmp/live_state.env; set +a; export SCOPE_BRIDGE_RESTORE="$PWD/.tmp/live_state.json"; fi
 while true; do
   touch /workspace/.heartbeat
   echo "${ORIENTATION:-portrait}" > .tmp/relay_orientation   # the laptop relay crops the camera to match
@@ -43,6 +45,8 @@ while true; do
     export MODEL=longlive   # this relay serves LongLive 1 only
     if [ "$(server_sig)" != "$SIG" ]; then echo "[live_cloud] server settings changed: restarting Scope"; stop_server; start_server; SIG=$(server_sig); fi
   else
+    # keep the live settings (prompt, preset, reference, graph tweaks) for the next connection
+    if [ -f .tmp/live_state.env ]; then set -a; source .tmp/live_state.env; set +a; export SCOPE_BRIDGE_RESTORE="$PWD/.tmp/live_state.json"; fi
     echo "[live_cloud] bridge exited ($rc); waiting for the next connection"; sleep 2
   fi
 done

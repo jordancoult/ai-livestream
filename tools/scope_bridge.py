@@ -1152,6 +1152,10 @@ async def main() -> None:
                     state["ref"] = refs
                 if state.get("start") and not (ASSETS / Path(state["start"]).name).is_file():
                     skipped.append(state["start"]); state["start"] = None
+                if args.pipeline in LL_FAMILY and state.get("vace_input"):
+                    # camera -> VACE control on LongLive = confetti at every noise/step setting (2026-10-31 tests)
+                    state["vace_input"] = False
+                    skipped.append("camera -> VACE control (breaks LongLive)")
                 preset = src.get("preset") if src.get("preset") in PRESETS else state["preset"]
                 state["preset"] = preset
                 current_upscaler()

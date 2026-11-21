@@ -462,7 +462,7 @@ class _StreamOutput:
         import queue
         import threading
 
-        self.cmd, self.q, self.closed = cmd, queue.Queue(maxsize=8), False
+        self.cmd, self.q, self.closed, self.proc = cmd, queue.Queue(maxsize=8), False, None
         self.stdin = self  # file-like enough for the callers: .write() / .close()
         threading.Thread(target=self._run, daemon=True).start()
 
@@ -480,7 +480,7 @@ class _StreamOutput:
 
     def _run(self):
         while not self.closed:
-            proc = subprocess.Popen(self.cmd, stdin=subprocess.PIPE)
+            self.proc = proc = subprocess.Popen(self.cmd, stdin=subprocess.PIPE)
             try:
                 while not self.closed:
                     proc.stdin.write(self.q.get())
@@ -494,7 +494,13 @@ class _StreamOutput:
                 proc.wait()
 
     def close(self):
+        # kill the listener too: an orphaned ffmpeg kept serving a dead stream to the next viewer (2026-11-21)
         self.closed = True
+        if self.proc is not None:
+            try:
+                self.proc.kill()
+            except OSError:
+                pass
 
     def wait(self):
         return 0

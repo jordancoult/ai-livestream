@@ -24,10 +24,11 @@ UP=$!
 # output: box stream -> ffplay window or virtual camera, reconnecting
 ( while true; do
     if [ "$OUT" = ffplay ]; then
+      # -timeout: give up on a dead connection after 5 s and reconnect (the box restarts its stream per session)
       ffplay -loglevel error -fflags nobuffer -flags low_delay -framedrop -probesize 32768 -analyzeduration 0 \
-        -window_title "LongLive (cloud 5090)" tcp://127.0.0.1:18102
+        -autoexit -window_title "LongLive (cloud 5090)" "tcp://127.0.0.1:18102?timeout=5000000"
     else
-      ffmpeg -loglevel error -fflags nobuffer -flags low_delay -probesize 32768 -analyzeduration 0 -i tcp://127.0.0.1:18102 \
+      ffmpeg -loglevel error -fflags nobuffer -flags low_delay -probesize 32768 -analyzeduration 0 -i "tcp://127.0.0.1:18102?timeout=5000000" \
         -pix_fmt yuv420p -f v4l2 "$OUT"
     fi
     sleep 1; done ) &

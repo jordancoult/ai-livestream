@@ -223,7 +223,7 @@ function launchCmd() {
   if (String(L.seed).trim() !== '') ba.push('--seed ' + parseInt(L.seed));
   if (L.MODEL === 'longlive2' && L.window) ba.push('--memory-window ' + L.window);
   if (ba.length) env.push(`BRIDGE_ARGS=${shq(ba.join(' '))}`);
-  return env.join(' ') + ' ./start_scope.sh --bridge';
+  return env.join(' ') + ' ./start_scope.sh --bridge' + (S.launch.hw ? ' --hw ' + S.launch.hw : '');  // hw: non-laptop profile only
 }
 const imgOptions = sel => S.refs.map(f=>`<option ${f===sel?'selected':''}>${f}</option>`).join('');
 
@@ -514,6 +514,7 @@ function launchEnv() {
   if (String(L.seed).trim() !== '') ba.push('--seed ' + parseInt(L.seed));
   if (L.MODEL === 'longlive2' && L.window) ba.push('--memory-window ' + L.window);
   env.BRIDGE_ARGS = ba.join(' ');
+  if (S.launch.hw) env.HW_PROFILE = S.launch.hw;  // keep the hardware profile (start_scope.sh reads HW_PROFILE)
   return env;
 }
 async function restartNow() {

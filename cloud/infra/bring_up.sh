@@ -19,6 +19,7 @@ case $NAME in
     for i in $(seq 1 120); do s=$(P 'grep -hE "Application startup complete|Traceback|EXIT=|rror:|× No solution" /workspace/logs/setup.log /workspace/logs/server.log 2>/dev/null | tail -n 2' 30); [ -n "$s" ] && { echo "$s"; break; }; sleep 20; done ;;
   ll)
     P 'cd /workspace && git clone -q https://github.com/jordancoult/ai-livestream.git ail && git clone -q -b blackwell-realtime https://github.com/jordancoult/scope.git ail/scope && cd ail && mkdir -p .tmp && (setsid nohup bash -c "bash cloud/pipelines/longlive1/setup_box.sh && HF_HUB_ENABLE_HF_TRANSFER=0 bash cloud/pipelines/longlive1/models_box.sh > .tmp/models.log 2>&1 && setsid nohup bash cloud/pipelines/longlive1/live_cloud.sh > .tmp/live_cloud.log 2>&1 < /dev/null" > .tmp/setup.out 2>&1 < /dev/null &); echo setup started'
+    P 'mkdir -p /workspace/ail/assets'; put $(ls assets/*.png) /workspace/ail/assets/   # refs / start images (not in git)
     for i in $(seq 1 90); do s=$(P 'cd /workspace/ail; grep -h "waiting for the camera\|text-to-video\|MISSING\|Traceback" .tmp/live_cloud.log .tmp/models.log 2>/dev/null | tail -n 1' 30); [ -n "$s" ] && { echo "$s"; break; }; sleep 20; done ;;
   *) echo "usage: bring_up.sh joyai|ll"; exit 2 ;;
 esac

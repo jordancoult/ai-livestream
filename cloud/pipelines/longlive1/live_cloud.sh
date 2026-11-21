@@ -29,10 +29,13 @@ while true; do
   echo "${ORIENTATION:-portrait}" > .tmp/relay_orientation   # the laptop relay crops the camera to match
   ( source env.sh; source profiles/hw_5090.env
     REF=(); [ -n "${CHARACTER_REF:-}" ] && read -r -a REFS <<<"$CHARACTER_REF" && REF=(--ref "${REFS[@]}")
+    # Input: the laptop camera relay, or (launch setting "Animate image") a still image animated by the model
+    if [ -n "${INPUT_IMAGE:-}" ]; then IN=(--input "$INPUT_IMAGE"); NS=(${NOISE:+--noise-scale "$NOISE"})  # image default 0.95
+    else IN=(--input "tcp://0.0.0.0:9101?listen=1"); NS=(--noise-scale "${NOISE:-1.0}"); fi
     exec scope/.venv/bin/python tools/scope_bridge.py --server http://127.0.0.1:8000 --pipeline longlive --hw 5090 \
-      --preset "$PRESET" --noise-mode "$NOISE_MODE" --noise-scale "${NOISE:-1.0}" --prompt "$PROMPT" "${REF[@]}" \
+      --preset "$PRESET" --noise-mode "$NOISE_MODE" "${NS[@]}" --prompt "$PROMPT" "${REF[@]}" \
       --out-size 832 480 --stream-kbps "${STREAM_KBPS:-2500}" $([ "${ORIENTATION:-portrait}" = landscape ] && echo --landscape) \
-      ${BRIDGE_ARGS:-} --input "tcp://0.0.0.0:9101?listen=1" --output "tcp://0.0.0.0:9102?listen=1" )
+      ${BRIDGE_ARGS:-} "${IN[@]}" --output "tcp://0.0.0.0:9102?listen=1" )
   rc=$?
   if [ "$rc" = 75 ] && [ -f .tmp/restart.env ]; then
     echo "[live_cloud] restart with new settings: $(tr '\n' ' ' < .tmp/restart.env)"

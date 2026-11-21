@@ -53,8 +53,10 @@ class Upscaler:
 
     @torch.no_grad()
     def __call__(self, frames: torch.Tensor) -> torch.Tensor:
-        if self.method == "none":
-            return frames
+        if self.method == "none":  # no enhancement: untouched at the output size, else the cheapest plain resize
+            if tuple(frames.shape[-2:]) == tuple(self.size):
+                return frames
+            return F.interpolate(frames.float(), size=self.size, mode="bilinear").clamp(0, 1)
         if self.net is not None:
             x = self.net(frames.half().contiguous(memory_format=torch.channels_last))
             # x4 output is larger than the target; antialiased downscale to 720x1280

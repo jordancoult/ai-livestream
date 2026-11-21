@@ -180,7 +180,7 @@ if _restore and Path(_restore).is_file():
     print(f"[bridge] restored live settings from before the restart", flush=True)
 SAVED = Path(__file__).resolve().parents[1] / "saved_settings"
 GRAPH_PAGE = Path(__file__).resolve().parent / "graph_page.html"
-UPSCALERS = ["bilinear", "bicubic", "bicubic-sharp", "animevideov3", "general-x4v3"]
+UPSCALERS = ["none", "bilinear", "bicubic", "bicubic-sharp", "animevideov3", "general-x4v3"]  # none = no enhancement
 probe = {"in_edges": [], "in_prev": 0.0, "out_prev": None, "out_base": None, "lat": [], "recv_t": []}
 
 

@@ -71,6 +71,7 @@ parser.add_argument("--landscape", action="store_true", help="16:9 instead of 9:
 parser.add_argument("--input-size", default="1280x720", help="Capture size for v4l2 devices")
 parser.add_argument("--output", default="/dev/video10", help="v4l2loopback device, .mp4 path, or tcp://0.0.0.0:PORT?listen=1 "
                     "(low-latency MPEG-TS stream for a remote viewer: cloud relay)")
+parser.add_argument("--stream-kbps", type=int, default=6000, help="tcp:// output: H.264 bitrate (cloud relay downlink)")
 parser.add_argument("--size", type=int, nargs=2, default=[576, 320], metavar=("H", "W"), help="Generation size")
 parser.add_argument("--out-size", type=int, nargs=2, default=[1280, 720], metavar=("H", "W"), help="Output size after upscale")
 parser.add_argument("--preset", type=int, default=30, choices=sorted(PRESETS))
@@ -510,8 +511,9 @@ def open_output():
     if args.output.startswith("/dev/video"):
         target = ["-f", "v4l2", args.output]
     elif args.output.startswith(("tcp://", "udp://", "srt://")):  # cloud relay: stream to the laptop
-        target = ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-g", "30", "-b:v", "6M",
-                  "-maxrate", "8M", "-bufsize", "2M", "-f", "mpegts", args.output]
+        k = args.stream_kbps
+        target = ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-g", "30", "-b:v", f"{k}k",
+                  "-maxrate", f"{int(k * 1.3)}k", "-bufsize", f"{k // 2}k", "-f", "mpegts", args.output]
     else:
         target = ["-c:v", "libx264", "-preset", "veryfast", args.output]
     # Frames arrive already converted to yuv420p on the GPU, so ffmpeg just copies bytes.

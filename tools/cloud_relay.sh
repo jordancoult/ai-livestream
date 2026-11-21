@@ -2,7 +2,7 @@
 # Laptop side of the LongLive cloud relay: webcam -> (SSH tunnel) -> scope_bridge on the GPU box -> /dev/video10.
 #   POD_FILE=cloud/infra/.pod.ll tools/cloud_relay.sh            (box: cloud/pipelines/longlive1/live_cloud.sh running)
 # Tunnel: 18101 -> box 9101 (camera in), 18102 -> box 9102 (output), 18090 -> box 8090 (control page).
-# Env: CAMERA=/dev/video0  CAMERA_SIZE=1280x720  UP_KBPS=2000 (your upload is the bottleneck)
+# Env: CAMERA=/dev/video0  CAMERA_SIZE=1280x720  UP_KBPS=1200 (your upload is the bottleneck)
 #      OUT=ffplay (default: a window) | /dev/video10 (virtual camera for OBS)
 W="$(cd "$(dirname "$0")/.." && pwd)"; cd "$W"
 POD_FILE="${POD_FILE:-cloud/infra/.pod.ll}" TUNNEL_NAME=ll FORWARDS="18090:8090 18101:9101 18102:9102" bash cloud/infra/tunnel.sh start
@@ -18,7 +18,7 @@ trap cleanup EXIT INT TERM
     else IN=(-re -stream_loop -1 -i "$CAMERA"); fi   # a video file as a fake camera (tests)
     ffmpeg -loglevel error "${IN[@]}" \
       -vf "crop=ih*9/16:ih,scale=480:854" -c:v libx264 -preset ultrafast -tune zerolatency -g 30 \
-      -b:v "${UP_KBPS:-2000}k" -maxrate "${UP_KBPS:-2000}k" -bufsize 500k -f mpegts tcp://127.0.0.1:18101
+      -b:v "${UP_KBPS:-1200}k" -maxrate "${UP_KBPS:-1200}k" -bufsize 500k -f mpegts tcp://127.0.0.1:18101
     sleep 1; done ) &
 UP=$!
 # output: box stream -> ffplay window or virtual camera, reconnecting

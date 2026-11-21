@@ -174,7 +174,7 @@ let HW5090 = false;
 const DEF = {SCOPE_FUSED_KV:'1', SCOPE_COMPILE_BLOCKS:'1', SCOPE_COMPILE_TAE:'1', SCOPE_FP8_ROWWISE:'1', SCOPE_NOISE_T_OFFSET:'0', SCOPE_OUTPUT_TARGET_FRAMES:'3'};
 function initLaunch() {
   const e = S.launch.env;
-  L = {MODEL: S.launch.model, size: [...S.launch.size].sort((a,b)=>b-a).join(' '), ORIENTATION: e.ORIENTATION || 'portrait', INPUT_IMAGE: e.INPUT_IMAGE || '', vae: '', seed: S.launch.seed ?? '', window: S.launch.memory_window ?? '',
+  L = {MODEL: S.launch.model, size: [...S.launch.size].sort((a,b)=>b-a).join(' '), ORIENTATION: e.ORIENTATION || 'portrait', INPUT_IMAGE: S.text_only ? '__text__' : (e.INPUT_IMAGE || ''), vae: '', seed: S.launch.seed ?? '', window: S.launch.memory_window ?? '',
        SCOPE_KV_FRAMES: e.SCOPE_KV_FRAMES || '', SCOPE_FUSED_KV: e.SCOPE_FUSED_KV ?? '1', SCOPE_COMPILE_BLOCKS: e.SCOPE_COMPILE_BLOCKS ?? '1',
        SCOPE_COMPILE_TAE: e.SCOPE_COMPILE_TAE ?? '1', SCOPE_FP8_ROWWISE: e.SCOPE_FP8_ROWWISE ?? '1', SCOPE_NOISE_T_OFFSET: e.SCOPE_NOISE_T_OFFSET ?? '0',
        SCOPE_OUTPUT_TARGET_FRAMES: e.SCOPE_OUTPUT_TARGET_FRAMES ?? '3', CAMERA_SIZE: S.launch.input_size};
@@ -186,7 +186,7 @@ function launchBody() {
   const kvDef = ({longlive:12, memflow:12, 'reward-forcing':9})[S.pipeline] || 6;
   return `<div class="lrow">Model ${sel('MODEL', [['streamdiffusionv2','StreamDiffusionV2'],['longlive','LongLive'],['reward-forcing','Reward Forcing (new)'],['memflow','MemFlow (new)'],['longlive2','LongLive 2.0 (prompt-only, 1024x576)']])}</div>
   <div class="lrow">Orientation ${sel('ORIENTATION', [['portrait','Portrait 9:16'],['landscape','Landscape 16:9']])}</div>
-  <div class="lrow">Input ${sel('INPUT_IMAGE', [['','Camera'], ...(S.refs||[]).map(f=>['assets/'+f, 'Animate image: '+f])])}</div>
+  <div class="lrow">Input ${sel('INPUT_IMAGE', [['','Camera'], ...(L.MODEL !== 'longlive2' ? [['__text__','Text only (prompt, no camera)']] : []), ...(S.refs||[]).map(f=>['assets/'+f, 'Animate image: '+f])])}</div>
   <div class="lrow">Generation size ${sel('size', L.MODEL === 'longlive2' ? [['1024 576','576×1024'],['1280 704','704×1280 (native, slow)'],['960 544','544×960 (artifacts)']] : HW5090 ? [['832 480','480×832 (native, 5090 default)'],['768 432','432×768'],['960 544','544×960 (slow)'],['640 352','352×640'],['576 320','320×576 (laptop size)']] : [['512 288','288×512'],['576 320','320×576'],['640 352','352×640']])}</div>
   ${L.MODEL === 'longlive2' ? `<div class="lrow" title="How many recent latent frames the model attends to (plus the permanent start anchor). Bigger = more consistent but slower; 16 broke down in tests">Memory window ${sel('window', [['','default (24)'],['16','16 (fast, drifts)'],['20','20'],['24','24'],['28','28'],['32','32 (stock, slowest)']])}</div>` : ''}
   <div class="lrow">VAE ${sel('vae', [['','model default'],['tae','tae'],['lighttae','lighttae'],['wan','wan (slow)']])}</div>
@@ -214,7 +214,7 @@ function launchCmd() {
   env.push(`PRESET=${S.preset}`, `NOISE_MODE=${S.noise_mode}`);
   if (L.CAMERA_SIZE !== '1280x720') env.push(`CAMERA_SIZE=${L.CAMERA_SIZE}`);
   if (L.ORIENTATION === 'landscape') env.push('ORIENTATION=landscape');
-  if (L.INPUT_IMAGE) env.push(`INPUT_IMAGE=${L.INPUT_IMAGE}`);
+  if (L.INPUT_IMAGE && L.INPUT_IMAGE !== '__text__') env.push(`INPUT_IMAGE=${L.INPUT_IMAGE}`);
   if (S.ref.length) env.push(`CHARACTER_REF=assets/${S.ref[0]}`);
   env.push(`PROMPT=${shq(S.prompt)}`, 'NO_AUDIO=1');
   const ba = [];
@@ -222,6 +222,7 @@ function launchCmd() {
   if (L.vae) ba.push('--vae ' + L.vae);
   if (String(L.seed).trim() !== '') ba.push('--seed ' + parseInt(L.seed));
   if (L.MODEL === 'longlive2' && L.window) ba.push('--memory-window ' + L.window);
+  if (L.INPUT_IMAGE === '__text__') ba.push('--text-only');
   if (ba.length) env.push(`BRIDGE_ARGS=${shq(ba.join(' '))}`);
   return env.join(' ') + ' ./start_scope.sh --bridge' + (S.launch.hw ? ' --hw ' + S.launch.hw : '');  // hw: non-laptop profile only
 }
@@ -261,8 +262,12 @@ const EDGES = [
      title:'Conditioning strength', help:'How hard depth/camera control and the reference steer the model.'}},
   {id:'dit-recent', a:'dit.memory', b:'recent.write', kind:'feedback'},
   {id:'dit-dec', a:'dit.latent', b:'dec.latent', kind:'fixed'},
-  {id:'dec-up', a:'dec.frames', b:'up.frames', kind:'fixed'},
-  {id:'up-out', a:'up.frames', b:'out.frames', kind:'fixed'},
+  {id:'dec-up', a:'dec.frames', b:'up.frames', kind:'toggle', instant:true, on:()=>S.upscale!=='none', set:v=>({upscale: v ? '' : 'none'}),
+     help:'Decoded frames go through the Upscaler. Connect VAE decode straight to Output instead to bypass it.'},
+  {id:'up-out', a:'up.frames', b:'out.frames', kind:'toggle', instant:true, on:()=>S.upscale!=='none', set:v=>({upscale: v ? '' : 'none'}),
+     help:'Upscaled frames to the output.'},
+  {id:'dec-out', a:'dec.frames', b:'out.frames', kind:'toggle', instant:true, on:()=>S.upscale==='none', set:v=>({upscale: v ? 'none' : ''}),
+     help:'Bypass: the decoded frames go straight to the output (upscaler off; untouched when the generation size equals the output size).'},
 ];
 
 // ---------- build DOM ----------
@@ -379,7 +384,7 @@ function clickEdge(ev, e) {
     if (e.w.steer || e.w.key === 'vace_scale') html += `<button class="sec" id="p1" style="margin-top:8px">Set to 1.0</button> `;
   }
   if (e.kind === 'toggle' || (e.w && e.w.cut)) html += `<button id="pd" style="margin-top:8px">Disconnect</button>`;
-  if (e.w || e.kind === 'toggle') html += `<p style="margin-top:8px">${e.kind === 'toggle' ? TAG_R + ' Connecting or disconnecting resets memory automatically.' : TAG_I + ' Applies instantly, memory kept.' + (e.w.cut ? ' Disconnect = weight 0.' : '')}</p>`;
+  if (e.w || e.kind === 'toggle') html += `<p style="margin-top:8px">${e.kind === 'toggle' ? (e.instant ? TAG_I + ' Applies instantly, memory kept.' : TAG_R + ' Connecting or disconnecting resets memory automatically.') : TAG_I + ' Applies instantly, memory kept.' + (e.w.cut ? ' Disconnect = weight 0.' : '')}</p>`;
   pop.innerHTML = html;
   pop.style.display = 'block';
   pop.style.left = Math.min(ev.clientX + 10, innerWidth - 280) + 'px';
@@ -507,12 +512,13 @@ function sendSeed(v) { v = String(v).trim(); if (v === seedSent || v === String(
 function launchEnv() {
   const env = {};
   for (const k of ['SCOPE_KV_FRAMES','SCOPE_FUSED_KV','SCOPE_COMPILE_BLOCKS','SCOPE_COMPILE_TAE','SCOPE_FP8_ROWWISE','SCOPE_NOISE_T_OFFSET','SCOPE_OUTPUT_TARGET_FRAMES']) env[k] = String(L[k] ?? '');
-  env.MODEL = L.MODEL; env.CAMERA_SIZE = L.CAMERA_SIZE; env.NO_AUDIO = '1'; env.ORIENTATION = L.ORIENTATION; env.INPUT_IMAGE = L.INPUT_IMAGE;
+  env.MODEL = L.MODEL; env.CAMERA_SIZE = L.CAMERA_SIZE; env.NO_AUDIO = '1'; env.ORIENTATION = L.ORIENTATION; env.INPUT_IMAGE = L.INPUT_IMAGE === '__text__' ? '' : L.INPUT_IMAGE;
   const ba = [];
   if (L.size !== (L.MODEL === 'longlive2' ? '1024 576' : HW5090 ? '832 480' : '576 320')) ba.push('--size ' + L.size);
   if (L.vae) ba.push('--vae ' + L.vae);
   if (String(L.seed).trim() !== '') ba.push('--seed ' + parseInt(L.seed));
   if (L.MODEL === 'longlive2' && L.window) ba.push('--memory-window ' + L.window);
+  if (L.INPUT_IMAGE === '__text__') ba.push('--text-only');
   env.BRIDGE_ARGS = ba.join(' ');
   if (S.launch.hw) env.HW_PROFILE = S.launch.hw;  // keep the hardware profile (start_scope.sh reads HW_PROFILE)
   return env;

@@ -71,6 +71,8 @@ parser.add_argument("--landscape", action="store_true", help="16:9 instead of 9:
 parser.add_argument("--input-size", default="1280x720", help="Capture size for v4l2 devices")
 parser.add_argument("--output", default="/dev/video10", help="v4l2loopback device, .mp4 path, or tcp://0.0.0.0:PORT?listen=1 "
                     "(low-latency MPEG-TS stream for a remote viewer: cloud relay)")
+parser.add_argument("--text-only", action="store_true",
+                    help="Prompt-only stream on a camera model (LongLive): text input mode, the camera is never opened")
 parser.add_argument("--stream-kbps", type=int, default=6000, help="tcp:// output: H.264 bitrate (cloud relay downlink)")
 parser.add_argument("--size", type=int, nargs=2, default=[576, 320], metavar=("H", "W"), help="Generation size")
 parser.add_argument("--out-size", type=int, nargs=2, default=[1280, 720], metavar=("H", "W"), help="Output size after upscale")
@@ -120,6 +122,7 @@ if HW_LL:
         args.size = [832, 480]
 IMAGE_INPUT = Path(args.input).suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 TEXT_MODEL = args.pipeline in TEXT_MODELS
+TEXT_INPUT = TEXT_MODEL or args.text_only  # no camera: blank keep-alive track, Scope in text input mode
 if TEXT_MODEL and args.size == [576, 320]:
     args.size = [576, 1024]  # LongLive 2.0 degrades below ~1024x576
     args.landscape = True
@@ -642,9 +645,9 @@ async def main() -> None:
         if not args.no_load:
             await load_pipeline(client)
 
-        if TEXT_MODEL:
+        if TEXT_INPUT:
             player = None
-            source_track = BlankTrack()  # prompt-only model: never open the webcam
+            source_track = BlankTrack()  # prompt-only: never open the webcam
             print(f"[bridge] {args.pipeline}: text-to-video, camera not used", flush=True)
         elif IMAGE_INPUT:
             player = None
@@ -670,7 +673,7 @@ async def main() -> None:
         channel = pc.createDataChannel("parameters", ordered=True)
         if player is not None:
             source_track = player.video
-        camera_track = source_track if TEXT_MODEL else CropResizeTrack(source_track, W, H, record=args.record_input)
+        camera_track = source_track if TEXT_INPUT else CropResizeTrack(source_track, W, H, record=args.record_input)
         pc.addTransceiver(camera_track, direction="sendrecv")
         done = asyncio.Event()
         input_ended["ev"] = done
@@ -774,7 +777,7 @@ async def main() -> None:
             apply_preset(state["preset"])
 
         await pc.setLocalDescription(await pc.createOffer())
-        params = {"pipeline_ids": [args.pipeline], "input_mode": "text" if TEXT_MODEL else "video",
+        params = {"pipeline_ids": [args.pipeline], "input_mode": "text" if TEXT_INPUT else "video",
                   "prompts": [{"text": state["prompt"], "weight": 1.0}], "manage_cache": True,
                   "vace_enabled": True, "base_seed": state["seed"], **preset_params(state["preset"], with_ref=True)}
         params.pop("reset_cache")
@@ -821,7 +824,7 @@ async def main() -> None:
                  "attn": state["attn"], "attn_on": state["attn_on"],
                  "vace_input": state["vace_input"], "upscale_override": state["upscale_override"],
                  "ref_source": state["ref_source"], "start_source": state["start_source"],
-                 "upscalers": UPSCALERS, "pipeline": args.pipeline, "presets": {k: v["label"] for k, v in PRESETS.items()},
+                 "upscalers": UPSCALERS, "pipeline": args.pipeline, "text_only": bool(args.text_only), "presets": {k: v["label"] for k, v in PRESETS.items()},
                  "noise_pattern": "fixed" if fixed_noise(state["preset"]) else "random",
                  "step_list": effective_steps(state["preset"]),
                  "sink_frames": state["sink_frames"], "sink_max": SINK_MAX, "noise_controller": state["noise_controller"],

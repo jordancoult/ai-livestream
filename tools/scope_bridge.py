@@ -228,7 +228,14 @@ def effective_depth(preset: int) -> bool:
 
 
 def effective_steps(preset: int) -> list[int]:
-    return STEP_LISTS[state["steps"]] if state["steps"] else (args.steps or PRESETS[preset]["steps"])
+    steps = STEP_LISTS[state["steps"]] if state["steps"] else (args.steps or PRESETS[preset]["steps"])
+    if args.text_only and steps and steps[0] < 1000:
+        # Text mode starts from pure noise, so the schedule must start at t=1000 (camera mode starts lower on purpose:
+        # the noise slider sets the first step over the camera latent). Same step count, evenly spaced from 1000;
+        # 4 steps = 1000/750/500/250, LongLive's trained schedule. Starting at 750 left noise: cubes and sparkles.
+        n = len(steps)
+        steps = [round(1000 * (1 - i / n)) for i in range(n)]
+    return steps
 
 
 SINK_MAX = {"longlive": 10, "memflow": 10, "reward-forcing": 7}.get(args.pipeline, 4)  # below the KV window (12 / 9 / 6 latent frames)

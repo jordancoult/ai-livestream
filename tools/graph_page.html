@@ -133,7 +133,7 @@ const NODES = {
             <span class="muted"><b>Place in scene</b>: shrink yourself into the generated world (1 = off)</span>
             ${slider('place_scale', 'Size', S.place_scale ?? 1, 0.2, 1, 0.05)}${slider('place_x', 'Left / right', S.place_x ?? 0.5, 0, 1, 0.05)}${slider('place_y', 'Up / down', S.place_y ?? 0.6, 0, 1, 0.05)}`},
   start:   {t:'Start image', k:'src', x:20, y:400, outs:['image'], body:()=>`<span class="muted">Image${TAG_R}</span><select data-act="start-pick">${imgOptions((S.start_source==='start'&&S.start)||(S.ref_source==='start'&&S.ref[0])||pick.start)}</select><span class="muted">Shown for ~0.8 s after a reset to seed the sink</span>`},
-  ref:     {t:'Reference image', k:'src', x:20, y:600, outs:['image'], body:()=>`<span class="muted">Image${TAG_R}</span><select data-act="ref-pick">${imgOptions((S.ref_source==='ref'&&S.ref[0])||(S.start_source==='ref'&&S.start)||pick.ref)}</select><span class="muted">Encoded once per reset (VACE R2V)</span>`},
+  ref:     {t:'Reference image', k:'src', x:20, y:600, outs:['image'], body:()=>`<span class="muted">Image${TAG_R}</span><select data-act="ref-pick">${imgOptions((S.ref_source==='ref'&&S.ref[0])||(S.start_source==='ref'&&S.start)||pick.ref)}</select><input type="text" data-act="ref-url" placeholder="or paste an image link + Enter" style="width:100%;margin-top:4px">${S.ref_link ? '<span class="muted">Using an image link: cropped to the frame, kept in RAM only, never saved</span>' : ''}<span class="muted">Encoded once per reset (VACE R2V)</span>`},
   prompt:  {t:'Prompt', k:'src', x:20, y:800, outs:['text'], body:()=>`<textarea data-act="prompt" rows="3"></textarea><span class="muted">Enter applies · ${S.transition_steps ? TAG_I + ' blends in, memory kept' : TAG_R + ' instant change resets memory'}</span>
             <label class="lrow">Blend new prompt over <select data-act="transition" style="width:80px">${[0,2,4,8,16].map(n=>`<option value="${n}" ${S.transition_steps===n?'selected':''}>${n?n+' chunks':'instant'}</option>`).join('')}</select></label>`},
   depth:   {t:'Depth', k:'cond', x:300, y:20, ins:['frames'], outs:['depth'], body:()=> S.depth_available ? `<label class="lrow">Compute depth <select data-act="depth-stride">${[[1,'every frame'],[2,'every 2 frames'],[4,'every 4 frames (default)'],[12,'once per chunk (old, jerky)']].map(([v,l])=>`<option value="${v}" ${(S.depth_stride||4)==v?'selected':''}>${l}</option>`).join('')}</select></label>${slider('depth_cutoff', 'Body only (drop background)', S.depth_cutoff || 0, 0, 0.9, 0.05)}<span class="muted">0 = full scene depth. ~0.5 keeps just you; the model invents the rest</span><label class="lrow">Cut out person (no box edges)${TAG_I} <input type="checkbox" data-act="person-seg" ${S.person_seg?'checked':''}></label>${slider('depth_keep', 'Auto body-only: keep nearest fraction (0 = use cutoff)', S.depth_keep || 0, 0, 0.9, 0.05)}${slider('person_hint', 'Identity hint (your colours inside your outline)', S.person_hint || 0, 0, 0.9, 0.02)}` : `<span class="muted">Not available</span>`},
@@ -546,6 +546,16 @@ world.addEventListener('click', e => {
 });
 world.addEventListener('keydown', e => {
   if (e.target.dataset.act === 'seed' && e.key === 'Enter') { sendSeed(e.target.value); e.target.blur(); }
+  if (e.target.dataset.act === 'ref-url' && e.key === 'Enter' && e.target.value.trim()) {
+    const el = e.target, url = el.value.trim();
+    toast('⟳ Fetching the image link…', 'reset');
+    post('/params', {ref_url: url}).then(async res => {
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j.ok === false) throw new Error(j.error || res.status);
+      el.value = ''; el.blur();
+      toast('↻ Reference image from the link: applied, memory reset (RAM only, not saved)', 'reset'); poll();
+    }).catch(err => toast('✗ Image link not used: ' + err.message, 'err'));
+  }
   if (e.target.dataset.act === 'prompt' && e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault(); setP({prompt: e.target.value}); e.target.blur();
   }

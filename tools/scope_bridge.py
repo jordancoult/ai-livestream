@@ -164,6 +164,74 @@ state = {"preset": args.preset, "fps": 0.0, "upscale": None, "noise": args.noise
          "seed": DEFAULT_SEED,
          "prompt": args.prompt, "ref": [str(Path(r).resolve()) for r in args.ref] if args.ref else []}
 ASSETS = Path(__file__).resolve().parents[1] / "assets"
+# Reference image from a link (page: Reference node -> "paste image link"): downloaded, centre-cropped to the generation
+# aspect, kept only in RAM (/dev/shm) for Scope to read, deleted when replaced/cleared and on exit; never saved.
+EPHEMERAL = {"path": None}
+
+
+def _ephemeral_dir() -> Path:
+    return Path("/dev/shm") if Path("/dev/shm").is_dir() else Path(__import__("tempfile").gettempdir())
+
+
+def drop_ephemeral_ref():
+    p = EPHEMERAL["path"]
+    EPHEMERAL["path"] = None
+    if p:
+        try:
+            Path(p).unlink()
+        except OSError:
+            pass
+
+
+def is_ephemeral(path) -> bool:
+    return bool(EPHEMERAL["path"]) and str(path) == EPHEMERAL["path"]
+
+
+def fetch_ref_url(url: str, width: int, height: int) -> str:
+    """Download an image link (Google Images result links are unwrapped), centre-crop to width:height, resize, save
+    to RAM. Returns the path. Raises ValueError with a readable message."""
+    import io
+    import secrets
+    import urllib.parse
+    import urllib.request
+
+    from PIL import Image
+
+    url = url.strip()
+    q = urllib.parse.urlparse(url)
+    if "google." in q.netloc:  # https://www.google.com/imgres?imgurl=<real image>&... (or /url?url=...)
+        params = urllib.parse.parse_qs(q.query)
+        for key in ("imgurl", "url", "q"):
+            if params.get(key, [""])[0].startswith("http"):
+                url = params[key][0]
+                break
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("not an http(s) image link")
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)", "Accept": "image/*,*/*"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = r.read(25 * 2**20 + 1)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"download failed ({getattr(exc, 'code', '') or type(exc).__name__}): {getattr(exc, 'reason', exc)}")
+    if len(data) > 25 * 2**20:
+        raise ValueError("image larger than 25 MB")
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        raise ValueError("the link is not an image (for Google Images, open the image and copy its address)")
+    iw, ih = img.size
+    target = width / height
+    if iw / ih > target:
+        cw = round(ih * target)
+        img = img.crop(((iw - cw) // 2, 0, (iw - cw) // 2 + cw, ih))
+    else:
+        ch = round(iw / target)
+        img = img.crop((0, (ih - ch) // 2, iw, (ih - ch) // 2 + ch))
+    img = img.resize((width, height), Image.LANCZOS)
+    path = _ephemeral_dir() / f"ail_ref_{secrets.token_hex(8)}.png"
+    img.save(path)
+    os.chmod(path, 0o600)
+    return str(path)
 TMP = Path(__file__).resolve().parents[1] / ".tmp"
 # Live settings that survive "Restart with these settings" (and are cleared by "Reset to preset")
 OVERRIDES = {"depth": None, "steps": None, "start": None, "vace_scale": args.vace_scale,
@@ -851,7 +919,8 @@ async def main() -> None:
                  "depth_keep": state["depth_keep"], "person_seg": state["person_seg"], "place_fade_bottom": state["place_fade_bottom"], "place_ground": state["place_ground"],
                  "depth_stride": state["depth_stride"], "feedback": state["feedback"], "feedback_mode": state["feedback_mode"], "feedback_motion": state["feedback_motion"], "skip_clean_kv": state["skip_clean_kv"], "clean_kv_every": state["clean_kv_every"], "attention_backend": state["attention_backend"], "vace_hint_reuse": state["vace_hint_reuse"], "seed": state["seed"], "default_seed": DEFAULT_SEED, "launch": launch_settings(),
                  "output_warning": state.get("output_warning"),
-                 "ref": [Path(r).name for r in state["ref"]],
+                 "ref": [("(image link)" if is_ephemeral(r) else Path(r).name) for r in state["ref"]],
+                 "ref_link": bool(EPHEMERAL["path"]),
                  "refs": sorted(f.name for f in ASSETS.glob("*.png"))}))
 
             async def set_params(request):
@@ -884,12 +953,24 @@ async def main() -> None:
                     state["ref_source"] = body["ref_source"]
                 if body.get("start_source") in ("start", "ref"):
                     state["start_source"] = body["start_source"]
+                if body.get("ref_url"):
+                    try:
+                        path = await asyncio.to_thread(fetch_ref_url, str(body["ref_url"]), W, H)
+                    except Exception as exc:  # noqa: BLE001
+                        return web.json_response({"ok": False, "error": str(exc)}, status=400)
+                    drop_ephemeral_ref()
+                    EPHEMERAL["path"] = path
+                    state["ref"], state["ref_source"] = [path], "ref"
+                    update = preset_params(state["preset"], with_ref=True)  # re-send ref + reset cache
+                    print("[bridge] reference from link (in RAM only, not saved)", flush=True)
                 if body.get("ref") == "":  # "(none)": prompt only
+                    drop_ephemeral_ref()
                     state["ref"] = []
                     update = preset_params(state["preset"], with_ref=True)  # reset cache without a ref
                 elif "ref" in body:
                     path = (ASSETS / Path(body["ref"]).name).resolve()
                     if path.is_file():
+                        drop_ephemeral_ref()
                         state["ref"] = [str(path)]
                         update = preset_params(state["preset"], with_ref=True)  # re-send ref + reset cache
                 if "depth" in body:
@@ -1006,7 +1087,7 @@ async def main() -> None:
                 settings = {
                     "name": name, "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "model": args.pipeline, "vae": args.vae, "preset": pre, "preset_label": PRESETS[pre]["label"],
-                    "prompt": state["prompt"], "reference_image": [Path(r).name for r in state["ref"]],
+                    "prompt": state["prompt"], "reference_image": [Path(r).name for r in state["ref"] if not is_ephemeral(r)],
                     "noise": state["noise"], "noise_mode": state["noise_mode"], "fixed_noise": fixed_noise(pre),
                     "depth": state["depth"], "depth_effective": effective_depth(pre),
                     "steps": state["steps"], "denoising_step_list": effective_steps(pre),
@@ -1098,7 +1179,7 @@ async def main() -> None:
                 env["NETWORK"] = "1" if args.network else "0"  # restart keeps the network mode
                 env["NOISE_MODE"] = state["noise_mode"]
                 env["PROMPT"] = state["prompt"]
-                env["CHARACTER_REF"] = " ".join(f"assets/{Path(r).name}" for r in state["ref"])
+                env["CHARACTER_REF"] = " ".join(f"assets/{Path(r).name}" for r in state["ref"] if not is_ephemeral(r))
                 restore = TMP / "restart_state.json"
                 restore.write_text(json.dumps({k: state[k] for k in OVERRIDES}))
                 env["SCOPE_BRIDGE_RESTORE"] = str(restore)
@@ -1178,7 +1259,7 @@ async def main() -> None:
                     ba = [f"--size {H} {W}"] + (["--text-only"] if args.text_only else []) + \
                          ([f"--vae {args.vae}"] if args.vae else []) + ([f"--seed {args.seed}"] if args.seed is not None else [])
                     keep = {"PRESET": str(state["preset"]), "NOISE_MODE": state["noise_mode"], "PROMPT": state["prompt"],
-                            "CHARACTER_REF": " ".join(f"assets/{Path(r).name}" for r in state["ref"]),
+                            "CHARACTER_REF": " ".join(f"assets/{Path(r).name}" for r in state["ref"] if not is_ephemeral(r)),
                             "ORIENTATION": "landscape" if args.landscape else "portrait", "BRIDGE_ARGS": " ".join(ba),
                             "INPUT_IMAGE": args.input if IMAGE_INPUT else ""}
                     (TMP / "live_state.env").write_text("".join(f"{k}={shlex.quote(v)}\n" for k, v in keep.items()))
@@ -1211,6 +1292,11 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    import atexit
+    import signal
+
+    atexit.register(drop_ephemeral_ref)  # an image-link reference never outlives the bridge
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

@@ -28,6 +28,7 @@ SIG=$(server_sig)
 if [ -f .tmp/live_state.env ]; then set -a; source .tmp/live_state.env; set +a; export SCOPE_BRIDGE_RESTORE="$PWD/.tmp/live_state.json"; fi
 while true; do
   touch /workspace/.heartbeat
+  rm -f /dev/shm/ail_ref_*   # image-link references live in RAM only, for one session
   echo "${ORIENTATION:-portrait}" > .tmp/relay_orientation   # the laptop relay crops the camera to match
   ( source env.sh; source profiles/hw_5090.env
     REF=(); [ -n "${CHARACTER_REF:-}" ] && read -r -a REFS <<<"$CHARACTER_REF" && REF=(--ref "${REFS[@]}")

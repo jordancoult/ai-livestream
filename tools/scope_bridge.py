@@ -65,10 +65,12 @@ PRESETS_5090_LL = {
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--server", default="http://127.0.0.1:8000")
-parser.add_argument("--input", default="/dev/video0", help="v4l2 device, video file, or still image (animated from that image)")
+parser.add_argument("--input", default="/dev/video0", help="v4l2 device, video file, still image (animated from that image), "
+                    "or tcp://0.0.0.0:PORT?listen=1 (MPEG-TS stream from a remote camera: cloud relay, tools/cloud_relay.sh)")
 parser.add_argument("--landscape", action="store_true", help="16:9 instead of 9:16 (swaps generation and output sizes)")
 parser.add_argument("--input-size", default="1280x720", help="Capture size for v4l2 devices")
-parser.add_argument("--output", default="/dev/video10", help="v4l2loopback device or .mp4 path")
+parser.add_argument("--output", default="/dev/video10", help="v4l2loopback device, .mp4 path, or tcp://0.0.0.0:PORT?listen=1 "
+                    "(low-latency MPEG-TS stream for a remote viewer: cloud relay)")
 parser.add_argument("--size", type=int, nargs=2, default=[576, 320], metavar=("H", "W"), help="Generation size")
 parser.add_argument("--out-size", type=int, nargs=2, default=[1280, 720], metavar=("H", "W"), help="Output size after upscale")
 parser.add_argument("--preset", type=int, default=30, choices=sorted(PRESETS))
@@ -396,7 +398,13 @@ class CropResizeTrack(MediaStreamTrack):
             )
 
     async def recv(self):
-        frame = await self.source.recv()
+        try:
+            frame = await self.source.recv()
+        except Exception:
+            if STREAM_IN and input_ended["ev"] is not None and not input_ended["ev"].is_set():
+                print("[bridge] camera stream ended", flush=True)
+                input_ended["ev"].set()
+            raise
         q = getattr(self.source, "_queue", None)  # aiortc MediaPlayer's internal (unbounded) queue
         if q is not None and args.latency_probe:
             self._n = getattr(self, "_n", 0) + 1
@@ -441,17 +449,71 @@ class CropResizeTrack(MediaStreamTrack):
         return new
 
 
+STREAM_OUT = args.output.startswith(("tcp://", "udp://", "srt://"))
+STREAM_IN = args.input.startswith(("tcp://", "udp://", "srt://"))
+input_ended = {"ev": None}  # cloud relay: the camera stream ended -> end this bridge run (the box script restarts it)
+
+
+class _StreamOutput:
+    """Cloud relay output (tcp://...?listen=1): ffmpeg is fed from a thread through a short frame queue, so a missing
+    or reconnecting viewer never blocks the event loop; when the viewer drops, ffmpeg is restarted to listen again."""
+
+    def __init__(self, cmd):
+        import queue
+        import threading
+
+        self.cmd, self.q, self.closed = cmd, queue.Queue(maxsize=8), False
+        self.stdin = self  # file-like enough for the callers: .write() / .close()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def write(self, data):
+        import queue
+
+        try:
+            self.q.put_nowait(data)
+        except queue.Full:  # viewer slow or not connected yet: drop the oldest frame
+            try:
+                self.q.get_nowait()
+            except queue.Empty:
+                pass
+            self.q.put_nowait(data)
+
+    def _run(self):
+        while not self.closed:
+            proc = subprocess.Popen(self.cmd, stdin=subprocess.PIPE)
+            try:
+                while not self.closed:
+                    proc.stdin.write(self.q.get())
+            except (BrokenPipeError, OSError):
+                print("[bridge] output viewer disconnected; listening for a new one", flush=True)
+            finally:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                proc.wait()
+
+    def close(self):
+        self.closed = True
+
+    def wait(self):
+        return 0
+
+
 def open_output():
     if args.output.startswith("/dev/video"):
         target = ["-f", "v4l2", args.output]
+    elif args.output.startswith(("tcp://", "udp://", "srt://")):  # cloud relay: stream to the laptop
+        target = ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-g", "30", "-b:v", "6M",
+                  "-maxrate", "8M", "-bufsize", "2M", "-f", "mpegts", args.output]
     else:
         target = ["-c:v", "libx264", "-preset", "veryfast", args.output]
     # Frames arrive already converted to yuv420p on the GPU, so ffmpeg just copies bytes.
-    return subprocess.Popen(
-        ["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "yuv420p",
-         "-s", f"{OW}x{OH}", "-r", "30", "-i", "-", "-pix_fmt", "yuv420p", *target],
-        stdin=subprocess.PIPE,
-    )
+    cmd = ["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "yuv420p",
+           "-s", f"{OW}x{OH}", "-r", "30", "-i", "-", "-pix_fmt", "yuv420p", *target]
+    if STREAM_OUT:
+        return _StreamOutput(cmd)
+    return subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
 
 def rgb_to_yuv420p(x: torch.Tensor) -> bytes:
@@ -583,6 +645,11 @@ async def main() -> None:
         elif args.input.startswith("/dev/video"):
             player = MediaPlayer(args.input, format="v4l2",
                                  options={"video_size": args.input_size, "framerate": "30", "input_format": "mjpeg"})
+        elif args.input.startswith(("tcp://", "udp://", "srt://")):  # cloud relay: live MPEG-TS from the laptop
+            print(f"[bridge] waiting for the camera stream on {args.input}", flush=True)
+            player = MediaPlayer(args.input, format="mpegts",
+                                 options={"fflags": "nobuffer", "flags": "low_delay", "probesize": "32768",
+                                          "analyzeduration": "0"})
         else:
             player = MediaPlayer(args.input, loop=True)
 
@@ -598,6 +665,7 @@ async def main() -> None:
         camera_track = source_track if TEXT_MODEL else CropResizeTrack(source_track, W, H, record=args.record_input)
         pc.addTransceiver(camera_track, direction="sendrecv")
         done = asyncio.Event()
+        input_ended["ev"] = done
         ffmpeg = open_output()
 
         async def check_output_format():

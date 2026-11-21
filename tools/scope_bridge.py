@@ -189,6 +189,9 @@ probe = {"in_edges": [], "in_prev": 0.0, "out_prev": None, "out_base": None, "la
 
 # Denoising timesteps for 1-5 steps (Scope replaces the first with the noise level)
 STEP_LISTS = {1: [750], 2: [750, 400], 3: [750, 500, 250], 4: [750, 600, 400, 200], 5: [750, 600, 450, 300, 150]}
+# 6-10 steps (extra options; defaults and 1-5 unchanged): evenly spaced from 750 like the 5-step list. Each step adds a
+# full DiT pass per chunk (~0.12 s at 832x480 on a 5090), so 10 steps runs ~8 fps there.
+STEP_LISTS.update({n: [round(750 * (1 - i / n)) for i in range(n)] for n in range(6, 11)})
 # Frames of the start image sent after a reset: covers the sink chunks (3 latent frames = 12 video
 # frames on both pipelines) plus camera frames already queued when the reset lands.
 START_HOLD_FRAMES = 24

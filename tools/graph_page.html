@@ -152,7 +152,7 @@ const NODES = {
   current: {t:'Memory: current', k:'mem', x:580, y:420, ins:['latent','noise'], outs:['kv'], body:()=>`<span class="muted">The chunk being generated: noisy camera latent</span>`},
   recent:  {t:'Memory: recent', k:'mem', x:580, y:600, ins:['write'], outs:['kv'], body:()=>`<span class="muted">Rolling window of previous chunks</span>`},
   dit:     {t:'Denoiser (DiT)', k:'model', x:870, y:230, ins:['sink','recent','current','prompt','vace'], outs:['latent','memory'],
-            body:()=>`<label class="muted">Steps${TAG_R} <select data-act="steps"><option value="">preset (${S.n_steps})</option>${[1,2,3,4,5].map(n=>`<option ${S.steps===n?'selected':''}>${n}</option>`).join('')}</select></label>
+            body:()=>`<label class="muted">Steps${TAG_R} <select data-act="steps"><option value="">preset (${S.n_steps})</option>${[1,2,3,4,5,6,7,8,9,10].map(n=>`<option ${S.steps===n?'selected':''}>${n}</option>`).join('')}</select></label>
                       <span class="muted">Timesteps: ${S.step_list.join(', ')}</span>
                       <label><input type="checkbox" data-act="steer" ${S.attn_on?'checked':''}> attention steering${TAG_I}</label>
                       <label class="lrow" title="After each chunk the model re-reads the finished frames once more to store a clean memory of them. Skipping it on some chunks is faster; never = fastest but drifts. Applies with 2+ steps.">Clean pass${TAG_I} <select data-act="clean-every">${[['1','every chunk (default)'],['2','every 2nd chunk'],['0','never (fast memory)']].map(([v,l])=>`<option value="${v}" ${(S.skip_clean_kv?'0':String(S.clean_kv_every||1))===v?'selected':''}>${l}</option>`).join('')}</select></label>

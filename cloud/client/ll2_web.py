@@ -166,7 +166,8 @@ def fetch_image(src: str):
                 if qs.get(k, [""])[0].startswith("http"):
                     src = qs[k][0]
                     break
-        req = urllib.request.Request(src, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)", "Accept": "image/*,*/*"})
+        req = urllib.request.Request(src, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+                                                   "Accept": "image/*,text/html;q=0.9,*/*;q=0.8"})
         try:
             with urllib.request.urlopen(req, timeout=15) as r:
                 raw = r.read(25 * 2**20 + 1)
@@ -175,6 +176,31 @@ def fetch_image(src: str):
                              f"{getattr(exc, 'reason', exc)}")
         if len(raw) > 25 * 2**20:
             raise ValueError("image larger than 25 MB")
+        if raw.lstrip()[:1] == b"<":  # a web page (e.g. a phone's Share link): use its preview image (og:image)
+            import html as _html
+            import re
+            page = raw[:2_000_000].decode("utf-8", "ignore")
+            m = None
+            for pat in (r'<meta[^>]+(?:property|name)=["\'](?:og:image(?::secure_url|:url)?|twitter:image(?::src)?)["\'][^>]*>',
+                        r'<link[^>]+rel=["\']image_src["\'][^>]*>'):
+                tag = re.search(pat, page, re.I)
+                if tag:
+                    m = re.search(r'(?:content|href)=["\']([^"\']+)["\']', tag.group(0), re.I)
+                    if m:
+                        break
+            if not m:
+                raise ValueError("that link is a web page without a preview image: open the image itself and copy its "
+                                 "address, or use Upload / choose photo")
+            img_url = urllib.parse.urljoin(src, _html.unescape(m.group(1)))
+            req = urllib.request.Request(img_url, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+                                                           "Accept": "image/*,*/*", "Referer": src})
+            try:
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    raw = r.read(25 * 2**20 + 1)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"preview image download failed ({getattr(exc, 'code', '') or type(exc).__name__})")
+            if len(raw) > 25 * 2**20:
+                raise ValueError("image larger than 25 MB")
         label = "link: " + urllib.parse.urlparse(src).netloc
     else:
         raw = (ASSETS / Path(src).name).read_bytes()

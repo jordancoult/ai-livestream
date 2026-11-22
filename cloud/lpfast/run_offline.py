@@ -102,6 +102,9 @@ def main():
     p.add_argument("--profile", action="store_true", help="sync per stage (stage_ms), slower")
     p.add_argument("--max", type=int, default=0)
     p.add_argument("--fps", type=float, default=25)
+    p.add_argument("--preset", default=None, help="presets.json name (gains, limits, gates, smoothing), as the live bridge")
+    p.add_argument("--set", default="", help='JSON overrides on top, e.g. \'{"euro": {"lower": [0.5, 3]}, "gates": '
+                   '{"score": [0.5, 0.35]}, "gains": {"lip": 2.0}}\'')
     a = p.parse_args()
     from lp_pass import LPPass
     dst = Path(a.dst)
@@ -117,6 +120,20 @@ def main():
     gains = {k: float(v) for k, v in (x.split("=") for x in a.gains.split(",") if x)}
     lp = LPPass(mode=a.mode, gains=gains, base_ema=a.base_ema, drv_smooth=a.drv_smooth)
     drv = lp.driver()
+    if a.preset:
+        lp.apply_preset(a.preset)
+        lp.pose = False  # as the live bridge: JoyAI already moves the head
+    if a.set:
+        o = json.loads(a.set)
+        if o.get("gains"):
+            lp.set_gain(**o["gains"])
+        if o.get("limits"):
+            lp.set_limit(**{k: (tuple(v) if v else None) for k, v in o["limits"].items()})
+        if o.get("gates"):
+            lp.set_gate(**o["gates"])
+        if "euro" in o:
+            lp.set_euro(o["euro"])
+    w_series = []
     from concurrent.futures import ThreadPoolExecutor
     pool = ThreadPoolExecutor(1)  # live: the driver frame is analysed when it is sent, in parallel
     H, W = outs[0].shape[:2]
@@ -136,6 +153,8 @@ def main():
         if times[-1] > 50 and k > 5:
             print(f"slow frame {k}: {times[-1]:.0f} ms, det_out {lp.src.detections}, det_in {drv.face.detections}")
         oks += info["ok"]
+        w_series.append([round(float(info.get("w", 0)), 3), info.get("face_score"), info.get("mouth_vis"),
+                         info.get("g_score"), info.get("g_cover"), info.get("g_pose")])
         gstats.append((k, info.get("covered", 0.0), info.get("g_cover", 1.0), info.get("g_pose", 1.0),
                        info.get("g_score", 1.0)))
         w_lp.write(r)
@@ -152,9 +171,9 @@ def main():
                      "pose_gated_frames": int(sum(g[3] < 1 for g in gstats)),
                      "turned_away_gated_frames": int(sum(g[4] < 1 for g in gstats)),
                      "cover_gated_at": [g[0] for g in gstats if g[2] < 1][:40]}, "stage_ms": {k: round(v, 2) for k, v in lp.timing.items()},
-           "args": vars(a)}
+           "w_series": w_series, "args": vars(a)}
     (dst / "timing.json").write_text(json.dumps(res, indent=1))
-    print(json.dumps({k: v for k, v in res.items() if k != "args"}))
+    print(json.dumps({k: v for k, v in res.items() if k not in ("args", "w_series")}))
 
 
 if __name__ == "__main__":

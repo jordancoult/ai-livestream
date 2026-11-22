@@ -45,7 +45,8 @@ def _log(msg):
 
 class LL2Engine:
     def __init__(self, height=576, width=1024, ckpt="S2", steps=None, kv_quant=True, local_attn=32, block=8,
-                 sage=False, compile=True, clean_every=1, t5_device="cuda", seed=0, recache_frames=16, rope="absolute", overlap=0, overlap_mode="lookahead"):
+                 sage=False, compile=True, clean_every=1, t5_device="cuda", seed=0, recache_frames=16, rope="absolute", overlap=0, overlap_mode="lookahead",
+                 refresh_every=0, refresh_strength=0.5):
         """ckpt: S2 (2-step) | S4 (4-step) | path. block: latent frames per chunk (8 = native = 32 video frames;
         4 halves the reaction latency). clean_every: 1 = clean KV pass every chunk (best consistency), 2 = every
         2nd, 0 = never. sage: SageAttention 2 (faster, slightly less exact)."""
@@ -61,6 +62,10 @@ class LL2Engine:
         # image breaks within seconds, 2026-11-22 test).
         self.overlap = int(overlap)
         self.overlap_mode = overlap_mode
+        # refresh (anti-drift, opt-in): every `refresh_every` chunks the finished chunk is re-noised to refresh_strength
+        # and denoised again in place (SDEdit) before its clean KV pass: drifting detail is pulled back toward clean
+        # images before it enters the memory. Costs ~1 extra pass on those chunks.
+        self.refresh_every, self.refresh_strength = int(refresh_every), float(refresh_strength)
         try:
             self._build(height, width, ckpt, steps, kv_quant, local_attn, block, sage, compile, clean_every,
                         t5_device, seed)
@@ -347,7 +352,20 @@ class LL2Engine:
                 if i + 1 < len(sig):
                     x = clamp((1 - sig[i + 1]) * x0 + sig[i + 1] * self._noise(n))
             latents = x0
-        clean = cut or (self.clean_every == 1) or (self.clean_every > 1 and self.chunk % self.clean_every == 0)
+        refreshed = bool(self.refresh_every and (self.chunk + 1) % self.refresh_every == 0)
+        if refreshed:
+            sr = min(max(self.refresh_strength, 0.05), 0.95)
+            rsig = [sr] + [float(t) / 1000.0 for t in timesteps if float(t) / 1000.0 < sr - 0.02]
+            x = clamp((1 - rsig[0]) * latents + rsig[0] * self._noise(n))
+            for i, sg in enumerate(rsig):
+                flow, _ = p.generator(noisy_image_or_video=x, conditional_dict=cond, timestep=tsv(sg * 1000.0),
+                                      kv_cache=p.kv_cache_pos, crossattn_cache=p.crossattn_cache_pos,
+                                      current_start=s0 * fsl, cache_start=s0 * fsl)
+                x0 = clamp(x - sg * flow.to(x.dtype))
+                if i + 1 < len(rsig):
+                    x = clamp((1 - rsig[i + 1]) * x0 + rsig[i + 1] * self._noise(n))
+            latents = x0
+        clean = cut or refreshed or (self.clean_every == 1) or (self.clean_every > 1 and self.chunk % self.clean_every == 0)
         if clean:
             p.generator(noisy_image_or_video=latents, conditional_dict=cond,
                         timestep=torch.zeros([1, n], device=self.dev, dtype=torch.float32),
@@ -369,7 +387,7 @@ class LL2Engine:
         frames = self._decode(latents[:, ov:n - look])
         rc = self.stats.get("recache_ms") if recache else None
         self.stats = {"dit_ms": 1000 * t_dit, "total_ms": 1000 * (time.perf_counter() - t_all), "frames": len(frames),
-                      "recache_ms": rc, "cut": bool(cut), "v2v": x_in is not None, "overlap": ov or look}
+                      "recache_ms": rc, "cut": bool(cut), "v2v": x_in is not None, "overlap": ov or look, "refresh": refreshed}
         return frames
 
     def _encode_frames(self, frames, need=None):

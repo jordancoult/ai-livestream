@@ -54,6 +54,15 @@ ST = {"prompt": a.prompt, "mode": a.mode, "strength": a.strength, "person": a.pe
 LOCAL = {"upscale": 0, "sharp": 0.0, "fps": "auto", "buffer": 4}
 Q = deque()  # (frame bgr, version)
 VIEWS = {"out": None, "in": None}  # latest frames for the page
+VIEW_COND = threading.Condition()
+VIEW_JPG = {"out": (0, None), "in": (0, None)}  # (serial, jpeg bytes)
+
+
+def publish(key, fr, q=88):
+    ok, jpg = cv2.imencode(".jpg", fr, [cv2.IMWRITE_JPEG_QUALITY, q])
+    with VIEW_COND:
+        VIEW_JPG[key] = (VIEW_JPG[key][0] + 1, jpg.tobytes())
+        VIEW_COND.notify_all()
 SENT_T = {}
 CMDS: asyncio.Queue = None
 LOOP = None
@@ -234,7 +243,12 @@ async def player():
     nxt = time.time()
     started = False
     while not STOP.is_set():
-        fps = CFG.get("fps", 24) if LOCAL["fps"] == "auto" else float(LOCAL["fps"])
+        if LOCAL["fps"] == "auto":
+            fps = CFG.get("fps", 24)
+        elif LOCAL["fps"] == "match":  # play at the generation rate: smooth, no once-per-chunk stall
+            fps = max(8.0, min(float(ST["gen_fps"] or CFG.get("fps", 24)) * 0.97, CFG.get("fps", 24)))
+        else:
+            fps = float(LOCAL["fps"])
         if not started:
             if len(Q) >= int(LOCAL["buffer"]):
                 started, nxt = True, time.time()
@@ -251,8 +265,9 @@ async def player():
         else:
             ST["repeated"] += 1
         if last is not None:
-            fr = post_process(last)
+            fr = await asyncio.to_thread(post_process, last) if (LOCAL["upscale"] or LOCAL["sharp"]) else last
             VIEWS["out"] = fr
+            await asyncio.to_thread(publish, "out", fr)
             SINKS.write(fr)
         nxt += 1.0 / fps
         await asyncio.sleep(max(0, nxt - time.time()))
@@ -457,7 +472,7 @@ button.warn{background:#3a2c14;border-color:var(--warn);color:var(--warn)}
  <div class="card"><h2>Local (instant)</h2><div class="grid2">
   <label>Upscale</label><select id="upscale"><option value="0">off (native)</option><option value="1080">1080p (Lanczos)</option><option value="1440">1440p (Lanczos)</option></select>
   <label>Sharpen</label><div class="row" style="margin:0"><input type="range" id="sharp" min="0" max="1.5" step="0.05"><span id="shv"></span></div>
-  <label>Playout fps</label><select id="fps"><option value="auto">server (24)</option><option>25</option><option>24</option><option>20</option><option>18</option><option>15</option></select>
+  <label>Playout fps</label><select id="fps"><option value="auto">server (24)</option><option value="match">match generation (smooth, no stalls)</option><option>25</option><option>24</option><option>20</option><option>18</option><option>15</option></select>
   <label>Buffer</label><select id="buffer"><option>4</option><option>8</option><option>16</option><option>32</option></select>
  </div><div class="muted">If generation fps is below playout fps, playback stutters once per chunk: lower the playout fps or speed up the server.</div></div>
 </section></main>
@@ -468,7 +483,7 @@ for(const [id,t] of Object.entries(TIPS)){ const el=document.getElementById(id);
  if(lab&&lab.tagName==='LABEL'){ const q=document.createElement('span'); q.className='tip'; q.tabIndex=0; q.textContent='?'; q.dataset.tip=t; lab.appendChild(q); } } let S=null, formInit=false;
 const post=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());
 function msg(t){S&&(S.message=t)}
-function stat(){ if(!S) return; const c=S.cfg, pf=S.local.fps==='auto'?(c.fps||24):+S.local.fps, g=S.gen_fps;
+function stat(){ if(!S) return; const c=S.cfg, pf=S.local.fps==='auto'?(c.fps||24):S.local.fps==='match'?Math.min(c.fps||24,+((S.gen_fps||24)*0.97).toFixed(1)):+S.local.fps, g=S.gen_fps;
  const gcls=g==null?'':(g>=pf*1.03?'ok':g>=pf*0.97?'warn':'bad');
  $('stat').innerHTML=`<b>Status</b><span>${S.status}</span><b>Server</b><span>${c.width}×${c.height}, ${c.ckpt||''}${c.steps?' '+c.steps+' steps':''}, ${c.sage?'Sage':'exact'} attention, KV ${c.kvq?'4-bit':'bf16'}, clean every ${c.clean_every}, window ${c.window}</span>
  <b>Generation</b><span class="${gcls}">${g??'–'} fps</span><b>Playout</b><span>${pf} fps · buffer ${S.buffer} · repeated ${S.repeated}</span>
@@ -535,16 +550,22 @@ class Web(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
             self.end_headers()
-            last = None
+            seen = 0
             try:
                 while not STOP.is_set():
-                    fr = VIEWS.get(key)
-                    if fr is not None and fr is not last:
-                        last = fr
-                        ok, jpg = cv2.imencode(".jpg", fr, [cv2.IMWRITE_JPEG_QUALITY, 88])
-                        self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " +
-                                         str(len(jpg)).encode() + b"\r\n\r\n" + jpg.tobytes() + b"\r\n")
-                    time.sleep(1 / 30)
+                    if key == "in":  # webcam preview: ~15 fps is plenty
+                        fr = VIEWS.get("in")
+                        if fr is not None:
+                            publish("in", fr, 80)
+                        time.sleep(1 / 15)
+                    with VIEW_COND:
+                        VIEW_COND.wait_for(lambda: VIEW_JPG[key][0] != seen or STOP.is_set(), timeout=1.0)
+                        seen, jpg = VIEW_JPG[key]
+                    if jpg is None:
+                        continue
+                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " +
+                                     str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n")
+                    self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 pass
         else:

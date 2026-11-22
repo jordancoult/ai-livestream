@@ -155,7 +155,17 @@ input[type=range]{flex:1} .val{min-width:42px;text-align:right;font-variant-nume
  <div class="card"><h2>Face pass (lpfast)</h2>
   <div class="row"><button id="ff_btn" onclick="send({facefix:!S.facefix_on})">on/off</button>
    <select id="preset" onchange="send({preset:this.value})"></select><small id="ffmode"></small></div>
-  <div id="gains"></div><small>Gains apply on the next frame. 1 = your motion as is, 0 = JoyAI's own, negative = mirrored.</small></div>
+  <div id="gains"></div><small>Gains apply on the next frame. 1 = your motion as is, 0 = JoyAI's own, negative = mirrored.</small>
+  <h2 style="margin-top:12px">Gates (when the effect fades out)</h2>
+  <pre id="gatelive" style="margin:4px 0;white-space:pre-wrap">-</pre>
+  <div class="gates">
+   <label title="Face confidence of YOUR face (frontal 0.76-0.9, turned away below 0.5): full effect above the first value, off below the second">Face score <input id="g_score0" type="number" step="0.05" min="0" max="1" style="width:4.5em"> <input id="g_score1" type="number" step="0.05" min="0" max="1" style="width:4.5em"></label><br>
+   <label title="How much of your mouth is visible (normal >= 0.66, covered ~0): full above the first value, off below the second">Mouth visible <input id="g_cover0" type="number" step="0.05" min="0" max="1" style="width:4.5em"> <input id="g_cover1" type="number" step="0.05" min="0" max="1" style="width:4.5em"></label><br>
+   <label title="Your head turned left/right (degrees): starts fading at the first value, off at the second">Head yaw ° <input id="g_yaw0" type="number" step="1" style="width:4.5em"> <input id="g_yaw1" type="number" step="1" style="width:4.5em"></label><br>
+   <label title="Your head tilted up/down from your usual (degrees): starts fading at the first value, off at the second">Head pitch ° <input id="g_pitch0" type="number" step="1" style="width:4.5em"> <input id="g_pitch1" type="number" step="1" style="width:4.5em"></label><br>
+   <label title="Frames the mouth must be clear after a cover before the effect returns">Hold after cover <input id="g_hold" type="number" step="1" min="0" style="width:4.5em"></label>
+   <label title="Mouth-covered + face-confidence checks. Off = only the head-angle gates fade the effect"><input id="g_vis" type="checkbox"> cover/confidence checks</label>
+  </div><small>Lower the second value (or untick the checks) if the effect switches on and off. /save NAME in the terminal stores them in a preset.</small></div>
  <div class="card"><h2>Status</h2><div id="status">connecting...</div></div>
 </div>
 <script>
@@ -194,5 +204,17 @@ async function poll(){try{S=await (await fetch('/status')).json();}catch(e){docu
   document.getElementById('ffmode').textContent='mode '+S.facefix_mode;} else {fb.textContent='not started (run with --facefix-preset)';fb.disabled=true;}
  document.getElementById('status').textContent=
   `session   ${S.width}x${S.height}  ${S.state}\nref       ${S.ref||'none'}\nserver    ${S.server_fps} fps received\nplayout   ${S.play_fps} fps  queue ${S.queue}  played ${S.played}  repeated ${S.repeated}  dropped ${S.dropped}\nlatency   glass-to-glass median ${S.g2g_ms} ms\nface pass ${S.facefix_available?(S.facefix_on?'on':'off')+'  hit '+S.facefix_hit+'  render '+S.facefix_ms+' ms':'-'}\nprompt    ${S.prompt.slice(0,160)}${S.prompt.length>160?'...':''}\n${S.last_msg||''}`;}
+const GATES={score:['g_score0','g_score1'],cover:['g_cover0','g_cover1'],drv_yaw:['g_yaw0','g_yaw1'],drv_pitch:['g_pitch0','g_pitch1']};
+for(const [k,[a,b]] of Object.entries(GATES)) for(const id of [a,b]) document.getElementById(id).onchange=()=>send({gate:{[k]:[+document.getElementById(a).value,+document.getElementById(b).value]}});
+document.getElementById('g_hold').onchange=e=>send({gate:{cover_hold:+e.target.value}});
+document.getElementById('g_vis').onchange=e=>send({gate:{visibility:e.target.checked}});
+function gatesUI(){ if(!S||!S.gates) return; const act=document.activeElement;
+ for(const [k,[a,b]] of Object.entries(GATES)){ const v=S.gates[k]||[]; for(const [id,x] of [[a,v[0]],[b,v[1]]]){const e=document.getElementById(id); if(e!==act) e.value=x;} }
+ const h=document.getElementById('g_hold'); if(h!==act) h.value=S.gates.cover_hold; document.getElementById('g_vis').checked=!!S.gates.visibility;
+ const g=S.gate_info||{}, f=x=>x==null?'-':x, closed=[];
+ if(g.g_score!=null&&g.g_score<1) closed.push('face score'); if(g.g_cover!=null&&g.g_cover<1) closed.push('mouth visibility');
+ if(g.g_pose!=null&&g.g_pose<1) closed.push('head angle');
+ document.getElementById('gatelive').textContent=`effect strength ${f(S.face_w)}${closed.length?'   held back by: '+closed.join(', '):''}\nface score ${f(g.face_score)} (gate ${f(g.g_score)})   mouth visible ${f(g.mouth_vis)} (gate ${f(g.g_cover)})\nhead yaw ${f(g.drv_yaw)}°  pitch ${f(g.drv_pitch_rel)}° (gate ${f(g.g_pose)})`; }
+setInterval(gatesUI,1000);
 loadAssets(); renderViews(); poll(); setInterval(poll,1000);
 </script></body></html>"""

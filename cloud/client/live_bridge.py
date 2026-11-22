@@ -522,6 +522,7 @@ async def main():
                 if ff is not None:
                     ms = sorted(ff.ms)
                     tot = ff.stats["hit"] + ff.stats["miss"]
+                    st.update(gates=ff.lp.gates(), face_w=round(float(ff.lp.w), 2), gate_info=dict(ff.lp.gate_info))
                     st.update(facefix_mode=ff.lp.mode, gains=dict(ff.lp.gains),
                               facefix_hit=f"{ff.stats['hit']}/{tot}", facefix_ms=round(ms[len(ms) // 2]) if ms else None)
                 return st
@@ -555,6 +556,13 @@ async def main():
                             sess["ff_on"] = bool(cmd["facefix"])
                         say(f"face pass {'on' if sess['ff_on'] else 'off'}, mode {ff.lp.mode}, gains {ff.lp.gains}")
                     except ValueError as e:
+                        say(str(e))
+                if cmd.get("gate"):  # face-pass gates from the dashboard (same as /gate in the terminal)
+                    if ff is None:
+                        return say("no face pass in this run")
+                    try:
+                        say(f"gates: {ff.lp.set_gate(**cmd['gate'])}")
+                    except (ValueError, TypeError) as e:
                         say(str(e))
                 for k, cast in (("fps", float), ("play_fps", float), ("buffer", int)):
                     if cmd.get(k):

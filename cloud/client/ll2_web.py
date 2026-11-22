@@ -51,7 +51,7 @@ CFG = {"height": 704, "width": 1280}  # server config (from its "config" message
 ST = {"prompt": a.prompt, "mode": a.mode, "strength": a.strength, "person": a.person, "status": "starting",
       "gen_fps": None, "gen_ms": None, "ahead": None, "change_latency": None, "message": "", "version": 0,
       "played": 0, "repeated": 0, "snapped": 0}
-LOCAL = {"upscale": 0, "sharp": 0.0, "fps": "auto", "buffer": 8}
+LOCAL = {"upscale": 0, "sharp": 0.0, "fps": "auto", "buffer": 4}
 Q = deque()  # (frame bgr, version)
 VIEWS = {"out": None, "in": None}  # latest frames for the page
 SENT_T = {}
@@ -268,7 +268,7 @@ def server_args(s: dict) -> str:
         args.append("--sage")
     if s.get("kvq", True):
         args.append("--kvq")
-    for k, flag in (("clean_every", "--clean-every"), ("window", "--window"), ("ahead", "--ahead"),
+    for k, flag in (("clean_every", "--clean-every"), ("window", "--window"), ("ahead", "--ahead"), ("overlap", "--overlap"),
                     ("jpeg", "--jpeg"), ("recache_frames", "--recache-frames")):
         if s.get(k) not in (None, ""):
             args.append(f"{flag} {int(s[k])}")
@@ -413,6 +413,12 @@ button{cursor:pointer;background:#1f2633} button.pri{background:var(--acc);color
 button.warn{background:#3a2c14;border-color:var(--warn);color:var(--warn)}
 .stat{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-variant-numeric:tabular-nums}
 .stat b{font-weight:500;color:var(--mut)} .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+.tip{display:inline-block;margin-left:5px;width:15px;height:15px;line-height:15px;text-align:center;border-radius:50%;
+ background:#2a3242;color:var(--fg);font-size:11px;cursor:help;position:relative}
+.tip:hover::after,.tip:focus::after{content:attr(data-tip);position:absolute;left:20px;top:-6px;z-index:10;width:340px;white-space:pre-line;
+ background:#0b0d12;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:12.5px;line-height:1.45;color:var(--fg);
+ box-shadow:0 6px 24px #0008;text-align:left}
+@media(max-width:900px){.tip:hover::after,.tip:focus::after{left:auto;right:0;top:20px;width:min(340px,80vw)}}
 .grid2{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center} .muted{color:var(--mut);font-size:12px}
 </style></head><body><main>
 <section>
@@ -441,7 +447,8 @@ button.warn{background:#3a2c14;border-color:var(--warn);color:var(--warn)}
   <label>KV cache</label><select id="kvq"><option value="1">4-bit NVFP4 (fits 32 GB)</option><option value="0">bf16 (faster, may run out of memory)</option></select>
   <label>Clean pass</label><select id="clean_every"><option value="1">every chunk (best)</option><option value="2">every 2nd (faster)</option><option value="3">every 3rd</option></select>
   <label>Memory window</label><select id="window"><option>32</option><option>28</option><option>24</option><option>20</option><option>16</option></select>
-  <label>Work ahead</label><select id="ahead"><option value="34">1 chunk (low latency)</option><option value="48">1.5 chunks</option><option value="64">2 chunks (smooth, +1.3 s)</option></select>
+  <label>Chunk</label><select id="overlap"><option value="0">8 latents / 32 frames (stock)</option><option value="4">overlap 4: 16 frames (half latency, 2x compute)</option><option value="2">overlap 2: 24 frames</option></select>
+  <label>Work ahead</label><select id="ahead"><option value="-1">auto (just in time, lowest latency)</option><option value="34">34 frames</option><option value="48">48 frames</option><option value="64">64 frames (smooth, +1.3 s)</option></select>
   <label>JPEG quality</label><select id="jpeg"><option>95</option><option>90</option><option>80</option><option>70</option></select>
   <label>Prompt re-cache</label><select id="recache_frames"><option value="16">16 frames (default)</option><option value="32">32 (stronger, slower)</option><option value="8">8</option><option value="0">off (fast, weak change)</option></select>
  <label>Positions</label><select id="rope"><option value="absolute">absolute (upstream)</option><option value="relative">window-relative (experimental)</option></select>
@@ -455,7 +462,10 @@ button.warn{background:#3a2c14;border-color:var(--warn);color:var(--warn)}
  </div><div class="muted">If generation fps is below playout fps, playback stutters once per chunk: lower the playout fps or speed up the server.</div></div>
 </section></main>
 <script>
-const $=id=>document.getElementById(id); let S=null, formInit=false;
+const $=id=>document.getElementById(id);
+const TIPS={"res": "What: the size the model generates at (latent grid = width/16 \u00d7 height/16; 1280\u00d7704 = 80\u00d744 = 3,520 tokens per latent frame).\nArchitecture: Wan2.2-5B was trained at 1280\u00d7704, so native is in-distribution; smaller sizes are slightly out of distribution but still work.\nTradeoff: compute grows with tokens (attention a bit faster than linearly). 1280\u00d7704 \u2248 18 fps on a 5090, 1024\u00d7576 \u2248 33 fps. Native = sharpest detail; lower = speed headroom.", "ori": "What: swaps width and height (e.g. 704\u00d71280 for phone-style vertical video).\nArchitecture: the same token count, so the same speed; the model saw far fewer portrait clips in training.\nTradeoff: expect composition/anatomy to be a bit weaker in portrait (untested here). Webcam input is centre-cropped to match.", "ckpt": "What: which distilled checkpoint is loaded. S2 = distilled for 2 denoising steps per chunk, S4 = for 4.\nArchitecture: both are causal (autoregressive) students distilled from Wan2.2-TI2V-5B, NVFP4-quantized; each step is one full transformer pass over the 8-latent block.\nTradeoff: S4 = richer texture/detail and steadier faces, but ~1.7\u00d7 the DiT time per chunk (needs Sage or a faster GPU to stay above 24 fps). S2 = the speed default.", "steps": "What: overrides the checkpoint's number of denoising steps per chunk.\nArchitecture: each step = one transformer pass over the block (plus the clean pass at the end). The distilled timestep schedule is matched to the checkpoint's default.\nTradeoff: more steps than the checkpoint was distilled for gives little and costs linearly; fewer steps = faster but blurrier/less coherent. Leave on default unless experimenting.", "sage": "What: the attention kernel. Exact = FlashAttention in bf16. Sage = SageAttention 2 (INT8 Q\u00b7K, FP8 P\u00b7V).\nArchitecture: attention runs over the current block + the KV window (up to 32 latent frames \u00d7 3,520 tokens) in every one of the 30 layers: the biggest cost at native.\nTradeoff: Sage \u2248 +40-50% fps (native \u2248 27-28 fps) but the quantization error shows as smeared faces in motion and artifacts at 1280\u00d7704. Exact = clean.", "kvq": "What: precision of the KV cache (the stored keys/values of past frames the model attends to).\nArchitecture: 30 layers \u00d7 window \u00d7 3,520 tokens/frame of K and V. NVFP4 (4-bit with per-block scales) is how upstream ships it.\nTradeoff: bf16 KV is slightly faster (no quantize/dequantize) and marginally more exact, but uses ~4\u00d7 the cache memory: at native with the T5 on the GPU it may not fit in 32 GB (the server falls back if it crashes).", "clean_every": "What: how often the finished chunk is re-run through the model at noise level 0 to write its keys/values into the cache.\nArchitecture: LongLive/Self-Forcing style: the denoising passes see noisy versions of the chunk; the clean pass stores what the chunk 'really' is, so later chunks condition on clean context.\nTradeoff: every 2nd chunk saves one full pass on half the chunks (\u2248 +15-20% fps), but the skipped chunks leave noisier context in memory: less consistency, more drift. Every chunk = best quality.", "window": "What: how many latent frames of past context the model attends to (each latent frame = 4 video frames; 32 = ~5.3 s at 24 fps), including the 8-frame attention sink.\nArchitecture: sliding-window causal attention: the oldest frames roll out, the first chunk stays pinned as the 'sink' (an anchor that stabilizes attention).\nTradeoff: smaller = faster attention but the scene forgets sooner and drifts; larger than trained (32) doesn't help (tested). Note: identity/scene memory beyond the window is lost.", "overlap": "What: how many video frames each step adds. Stock: an 8-latent block = 32 frames (1.33 s). Overlap 4 (lookahead): still an 8-latent block, but only the first 4 latents (16 frames) are shown; the other 4 are regenerated next step.\nArchitecture: the model only works on its trained 8-latent block, so the cost per step stays the same.\nTradeoff: halves the 'wait for a chunk' latency (-0.67 s) but halves the fps (\u224810 fps at native on a 5090) and text mode gets artifacts. Only useful on a much faster GPU.", "ahead": "What: how many unplayed frames the server keeps queued at your client before it starts the next chunk.\nArchitecture: generation is paced on frames you've actually played (reported back), not a server clock.\nTradeoff: auto = just-in-time (measured generation time + 6 frames): lowest latency, but any hiccup shows as a short stall. Larger = smoother through jitter, +1 s of latency per 24 frames. Only matters when generation is faster than playout.", "jpeg": "What: JPEG quality of the frames sent from the box to you.\nArchitecture: frames are encoded on the box's CPU (in a separate thread, streamed frame by frame) and decoded on the laptop.\nTradeoff: at 1280\u00d7704: q90 \u2248 120 KB/frame (\u224824 Mbit/s at 25 fps), q80 \u2248 80 KB (\u224817 Mbit/s), q70 \u2248 65 KB. Higher = fewer block artifacts but longer bursts on the network; q80 is visually near-lossless at 720p.", "recache_frames": "What: on a smooth prompt change, how many recent latent frames get their keys/values rebuilt under the new prompt.\nArchitecture: LongLive's KV-recache: the cached context was computed with the old prompt's cross-attention; without a rebuild the old scene dominates and the new prompt barely takes hold.\nTradeoff: more frames = the new prompt takes hold faster and stronger, but a one-off extra cost (a hitch) at the change; 0 = no hitch, the change is weak and slow. The sink is never rebuilt (use a hard cut for that).", "rope": "What: how frame positions are encoded (rotary position embeddings in time).\nArchitecture: absolute = upstream: every frame gets its true position (table extended so streams run for hours). Window-relative = the sink + window are laid out contiguously every chunk, so positions stay bounded.\nTradeoff: relative sounds ideal for infinite streams, but the model wasn't trained that way: in tests it drifted sooner. Keep absolute unless experimenting."};
+for(const [id,t] of Object.entries(TIPS)){ const el=document.getElementById(id); if(!el) continue; const lab=el.previousElementSibling;
+ if(lab&&lab.tagName==='LABEL'){ const q=document.createElement('span'); q.className='tip'; q.tabIndex=0; q.textContent='?'; q.dataset.tip=t; lab.appendChild(q); } } let S=null, formInit=false;
 const post=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());
 function msg(t){S&&(S.message=t)}
 function stat(){ if(!S) return; const c=S.cfg, pf=S.local.fps==='auto'?(c.fps||24):+S.local.fps, g=S.gen_fps;
@@ -469,7 +479,7 @@ function stat(){ if(!S) return; const c=S.cfg, pf=S.local.fps==='auto'?(c.fps||2
   $('ckpt').value=c2.ckpt||'S2'; $('steps').value=c2.steps||''; $('sage').value=c2.sage?'1':'0'; $('kvq').value=c2.kvq===false?'0':'1';
   $('clean_every').value=c2.clean_every||1; $('window').value=c2.window||32;
   const ar=(c2.args||'').match(/--ahead (\d+)/), jq=(c2.args||'').match(/--jpeg (\d+)/), rc=(c2.args||'').match(/--recache-frames (\d+)/);
-  $('ahead').value=ar?ar[1]:'34'; $('jpeg').value=jq?jq[1]:'90'; $('recache_frames').value=rc?rc[1]:'16'; $('rope').value=c2.rope||'absolute';
+  $('ahead').value=ar?ar[1]:'-1'; $('overlap').value=c2.overlap||0; $('jpeg').value=jq?jq[1]:'90'; $('recache_frames').value=rc?rc[1]:'16'; $('rope').value=c2.rope||'absolute';
   $('upscale').value=S.local.upscale; $('sharp').value=S.local.sharp; $('fps').value=S.local.fps; $('buffer').value=S.local.buffer;
   $('img').innerHTML=S.assets.map(f=>`<option>${f}</option>`).join(''); }
  $('strv').textContent=(+$('strength').value).toFixed(2); $('shv').textContent=(+$('sharp').value).toFixed(2); }
@@ -491,7 +501,7 @@ $('imggo').onclick=()=>post('/cmd',{image:$('img').value}).then(r=>!r.ok&&alert(
 $('imgurl').onkeydown=e=>{ if(e.key==='Enter'&&$('imgurl').value.trim()) post('/cmd',{image:$('imgurl').value.trim()}).then(r=>{ if(r.ok) $('imgurl').value=''; else alert('Image not used: '+r.error); }); };
 $('restart').onclick=()=>{ const [w,h]=$('res').value.split('x').map(Number), port=$('ori').value==='port';
  const s={height:port?w:h,width:port?h:w,ckpt:$('ckpt').value,steps:$('steps').value,sage:$('sage').value==='1',kvq:$('kvq').value==='1',
-  clean_every:$('clean_every').value,window:$('window').value,ahead:$('ahead').value,jpeg:$('jpeg').value,recache_frames:$('recache_frames').value,rope:$('rope').value};
+  clean_every:$('clean_every').value,window:$('window').value,ahead:$('ahead').value,overlap:$('overlap').value,jpeg:$('jpeg').value,recache_frames:$('recache_frames').value,rope:$('rope').value};
  if(confirm('Restart the server with these settings? The stream stops for ~1 min.')) post('/server',s).then(()=>{formInit=false;}); };
 for(const id of ['upscale','sharp','fps','buffer']) $(id).onchange=()=>post('/local',{[id]:$(id).value}); $('sharp').oninput=stat;
 </script></body></html>"""

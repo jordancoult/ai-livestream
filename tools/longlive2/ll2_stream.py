@@ -45,13 +45,22 @@ def _log(msg):
 
 class LL2Engine:
     def __init__(self, height=576, width=1024, ckpt="S2", steps=None, kv_quant=True, local_attn=32, block=8,
-                 sage=False, compile=True, clean_every=1, t5_device="cuda", seed=0, recache_frames=16, rope="absolute"):
+                 sage=False, compile=True, clean_every=1, t5_device="cuda", seed=0, recache_frames=16, rope="absolute", overlap=0, overlap_mode="lookahead"):
         """ckpt: S2 (2-step) | S4 (4-step) | path. block: latent frames per chunk (8 = native = 32 video frames;
         4 halves the reaction latency). clean_every: 1 = clean KV pass every chunk (best consistency), 2 = every
         2nd, 0 = never. sage: SageAttention 2 (faster, slightly less exact)."""
         cwd = os.getcwd()
         os.chdir(REPO)  # upstream uses relative wan_models/ paths
         self.rope = rope
+        # overlap: latent frames of each block re-used from the previous block as clean context (the I2V clamp
+        # mechanism). The model still sees its trained 8-latent block, but only block-overlap new latents (4*(block-overlap)
+        # frames) are produced per step: overlap 4 = half the chunk length = lower latency, at 2x compute per frame.
+        # overlap_mode: 'lookahead' = generate a normal block (all frames equally noisy, as trained), emit the first
+        # block-overlap latents, drop the rest (regenerated next step; v2v pads the future with the last input latent).
+        # 'clamp' = the block's first `overlap` latents are the previous clean tail at t=0 (out of distribution: the
+        # image breaks within seconds, 2026-11-22 test).
+        self.overlap = int(overlap)
+        self.overlap_mode = overlap_mode
         try:
             self._build(height, width, ckpt, steps, kv_quant, local_attn, block, sage, compile, clean_every,
                         t5_device, seed)
@@ -217,10 +226,20 @@ class LL2Engine:
         dit.rope_temporal_offset = 0.0
         self.shot = 0
         self.start = 0          # current_start_frame (latent frames, RoPE position)
+        self.prev = None        # previous block's clean latents (overlap context)
         self.chunk = 0
         self.image_latent = self.encode_image(image) if image is not None else None
         self.dec.reset()
         self.enc.reset()
+
+    def next_overlap(self):
+        if self.overlap_mode == "lookahead":
+            return self.overlap
+        return self.overlap if (self.overlap and self.prev is not None and self.chunk > 0 and not self.cut_pending) else 0
+
+    def frames_needed(self):
+        """Input video frames the next step consumes (and returns)."""
+        return 4 * (self.block - self.next_overlap())
 
     def _noise(self, n):
         return torch.randn([1, n, 48, self.h, self.w], device=self.dev, dtype=self.dtype, generator=self.gen)
@@ -265,24 +284,44 @@ class LL2Engine:
                 p.crossattn_cache_pos[b]["is_init"] = False
             self.stats["recache_ms"] = 1000 * (time.perf_counter() - t_rc)
         i2v = self.chunk == 0 and self.image_latent is not None
+        look = self.overlap if self.overlap_mode == "lookahead" else 0  # trailing latents generated, then dropped
+        ov = 0 if (cut or i2v or look) else self.next_overlap()
+        s0 = self.start - ov  # block start (latent frames): the first `ov` are the previous block's clean tail
+        ctx = self.prev[:, -ov:] if ov else None
+
+        def clamp(x):
+            if ov:
+                x = x.clone()
+                x[:, :ov] = ctx
+            return x
+
+        def tsv(val):
+            t_ = torch.full([1, n], float(val), device=self.dev, dtype=torch.float32)
+            if ov:
+                t_[:, :ov] = 0
+            return t_
         noise = self._noise(n)
         sched = p._initialize_sample_scheduler(noise)
         timesteps = list(sched.timesteps)
-        x_in = self._encode_frames(input_frames) if input_frames is not None else None
+        x_in = self._encode_frames(input_frames, need=n - ov - look) if input_frames is not None else None
+        if x_in is not None and look:  # the future we drop: hold the last input latent
+            x_in = torch.cat([x_in] + [x_in[:, -1:]] * look, 1)
+        if x_in is not None and ov:
+            x_in = torch.cat([ctx.to(x_in.dtype), x_in], 1)
         if x_in is None:
             # text (and I2V first chunk): upstream scheduler (UniPC), exactly as NVlabs' pipeline
-            latents = noise
+            latents = clamp(noise)
             for t in timesteps:
                 if abort is not None and abort():
                     return None
-                ts = t * torch.ones([1, n], device=self.dev, dtype=torch.float32)
+                ts = tsv(t)
                 if i2v:
                     latents = _overwrite_i2v_context(latents, self.image_latent, 1)
                     ts = _zero_i2v_context_timestep(ts, 1)
                 flow, _ = p.generator(noisy_image_or_video=latents, conditional_dict=cond, timestep=ts,
                                       kv_cache=p.kv_cache_pos, crossattn_cache=p.crossattn_cache_pos,
-                                      current_start=self.start * fsl, cache_start=self.start * fsl)
-                latents = sched.step(flow, t, latents, return_dict=False)[0]
+                                      current_start=s0 * fsl, cache_start=s0 * fsl)
+                latents = clamp(sched.step(flow, t, latents, return_dict=False)[0])
                 if i2v:
                     latents = _overwrite_i2v_context(latents, self.image_latent, 1)
         else:
@@ -293,42 +332,48 @@ class LL2Engine:
             s_top = float(strength) if m is None else float(m.max())
             s_top = min(max(s_top, 0.02), 1.0)
             sig = [s_top] + [float(t) / 1000.0 for t in timesteps if float(t) / 1000.0 < s_top - 0.02]
-            x = (1 - sig[0]) * x_in + sig[0] * noise
+            x = clamp((1 - sig[0]) * x_in + sig[0] * noise)
             for i, sg in enumerate(sig):
                 if abort is not None and abort():
                     return None
                 if m is not None:  # pixels whose start level is below sg haven't started: keep the noised input
                     keep = (m < sg).to(self.dtype)
-                    x = keep * ((1 - sg) * x_in + sg * self._noise(n)) + (1 - keep) * x
-                ts = torch.full([1, n], sg * 1000.0, device=self.dev, dtype=torch.float32)
+                    x = clamp(keep * ((1 - sg) * x_in + sg * self._noise(n)) + (1 - keep) * x)
+                ts = tsv(sg * 1000.0)
                 flow, _ = p.generator(noisy_image_or_video=x, conditional_dict=cond, timestep=ts,
                                       kv_cache=p.kv_cache_pos, crossattn_cache=p.crossattn_cache_pos,
-                                      current_start=self.start * fsl, cache_start=self.start * fsl)
-                x0 = x - sg * flow.to(x.dtype)
+                                      current_start=s0 * fsl, cache_start=s0 * fsl)
+                x0 = clamp(x - sg * flow.to(x.dtype))
                 if i + 1 < len(sig):
-                    x = (1 - sig[i + 1]) * x0 + sig[i + 1] * self._noise(n)
+                    x = clamp((1 - sig[i + 1]) * x0 + sig[i + 1] * self._noise(n))
             latents = x0
         clean = cut or (self.clean_every == 1) or (self.clean_every > 1 and self.chunk % self.clean_every == 0)
         if clean:
-            p.generator(noisy_image_or_video=latents, conditional_dict=cond, timestep=ts * 0,
+            p.generator(noisy_image_or_video=latents, conditional_dict=cond,
+                        timestep=torch.zeros([1, n], device=self.dev, dtype=torch.float32),
                         kv_cache=p.kv_cache_pos, crossattn_cache=p.crossattn_cache_pos,
-                        current_start=self.start * fsl, cache_start=self.start * fsl)
-        self.hist.append((latents.detach().clone(), self.start))
+                        current_start=s0 * fsl, cache_start=s0 * fsl)
+        self.prev = latents.detach().clone()
+        if look:  # keep (and later re-cache) only the emitted latents
+            self.hist.append((self.prev[:, :n - look], s0))
+        else:
+            self.hist.append((self.prev, s0))
         keep = max(1, p.local_attn_size // n) if p.local_attn_size and p.local_attn_size > 0 else 4
         self.hist = self.hist[-keep:]
-        self.start += n
+        self.start += n - ov - look  # lookahead: the next block starts over the dropped latents (cache overwritten)
         self.chunk += 1
         torch.cuda.synchronize()
         t_dit = time.perf_counter() - t_all
         if not decode:
             return latents
-        frames = self._decode(latents)
+        frames = self._decode(latents[:, ov:n - look])
         rc = self.stats.get("recache_ms") if recache else None
         self.stats = {"dit_ms": 1000 * t_dit, "total_ms": 1000 * (time.perf_counter() - t_all), "frames": len(frames),
-                      "recache_ms": rc, "cut": bool(cut), "v2v": x_in is not None}
+                      "recache_ms": rc, "cut": bool(cut), "v2v": x_in is not None, "overlap": ov or look}
         return frames
 
-    def _encode_frames(self, frames):
+    def _encode_frames(self, frames, need=None):
+        need = need or self.block
         import cv2
         lat = []
         for f in frames:
@@ -338,14 +383,14 @@ class LL2Engine:
             z = self.enc.encode(x)
             if z is not None:
                 lat.append(z)
-        while len(lat) < self.block and (z := self.enc.encode()) is not None:
+        while len(lat) < need and (z := self.enc.encode()) is not None:
             lat.append(z)
         if not lat:
             return None
         x = torch.cat(lat, 1).to(self.dtype)
-        if x.shape[1] < self.block:  # startup: pad by repeating the last latent
-            x = torch.cat([x] + [x[:, -1:]] * (self.block - x.shape[1]), 1)
-        return x[:, -self.block:]
+        if x.shape[1] < need:  # startup: pad by repeating the last latent
+            x = torch.cat([x] + [x[:, -1:]] * (need - x.shape[1]), 1)
+        return x[:, -need:]
 
     def _decode(self, latents):
         out = []

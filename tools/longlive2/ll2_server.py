@@ -48,8 +48,11 @@ p.add_argument("--sage", action="store_true")
 p.add_argument("--no-compile", action="store_true")
 p.add_argument("--clean-every", type=int, default=1)
 p.add_argument("--fps", type=float, default=24.0)
-p.add_argument("--ahead", type=int, default=34, help="unplayed frames kept at the client (in flight + queued) before the "
-               "next chunk starts: must cover one chunk's generation (~24 frames at 24 fps) + jitter")
+p.add_argument("--ahead", type=int, default=-1, help="unplayed frames kept at the client (in flight + queued) before the "
+               "next chunk starts: must cover one chunk's generation + jitter. -1 = auto (measured generation time + 6 "
+               "frames: just in time = lowest latency); larger = smoother, +1 s per 24 frames of latency")
+p.add_argument("--overlap", type=int, default=0, help="latent frames of each 8-latent block re-used as context: 4 = half "
+               "the chunk length (lower latency), 2x compute per frame")
 p.add_argument("--jpeg", type=int, default=90)
 p.add_argument("--rope", default="absolute", choices=["absolute", "relative"], help="temporal positions: absolute = upstream "
                "(table extended: runs for hours); relative = window-relative (bounded, but drifts sooner)")
@@ -61,8 +64,10 @@ from ll2_stream import LL2Engine  # noqa: E402
 
 eng = LL2Engine(height=a.height, width=a.width, ckpt=a.ckpt, steps=a.steps, kv_quant=a.kvq, local_attn=a.window,
                 block=a.block, sage=a.sage, compile=not a.no_compile, clean_every=a.clean_every,
-                recache_frames=max(1, a.recache_frames), rope=a.rope)
-FPC = 4 * a.block  # video frames per chunk
+                recache_frames=max(1, a.recache_frames), rope=a.rope,
+                overlap=a.overlap)
+FPC = 4 * a.block  # video frames per chunk (overlap mode: 4 * (block - overlap) after the first)
+GEN_S = [None]  # smoothed generation time per chunk (s), for the auto work-ahead
 
 
 def warmup():
@@ -71,6 +76,7 @@ def warmup():
     for _ in range(6):  # compile + a full KV window
         eng.step()
     blank = [np.zeros((a.height, a.width, 3), np.uint8)] * FPC
+    GEN_S[0] = None
     eng.reset(prompt=a.prompt)
     for _ in range(3):
         eng.step(input_frames=blank, strength=0.7)
@@ -127,7 +133,8 @@ def gen_loop():
         # pace: keep at most `ahead` chunks of frames in front of the playout clock
         while S.running and S.t0 is not None:
             played = S.consumed if S.consumed is not None else (time.perf_counter() - S.t0) / period
-            if S.sent - played <= a.ahead or S.version != version:  # a change: generate now (client snaps)
+            ahead = a.ahead if a.ahead >= 0 else (round(GEN_S[0] * a.fps) + 6 if GEN_S[0] else FPC + 2)
+            if S.sent - played <= ahead or S.version != version:  # a change: generate now (client snaps)
                 break
             time.sleep(0.003)
         with S.lock:  # pick up a change that arrived while waiting
@@ -141,8 +148,9 @@ def gen_loop():
         if mode == "v2v" and inputs:
             new = [x for x in inputs if x[0] > S.last_fid]  # frames not used yet (keeps the encoder continuous)
             old = [x for x in inputs if x[0] <= S.last_fid]
-            sel = (old + new)[-FPC:] if len(new) < FPC else new[-FPC:]
-            sel = [sel[0]] * (FPC - len(sel)) + sel
+            need = eng.frames_needed()
+            sel = (old + new)[-need:] if len(new) < need else new[-need:]
+            sel = [sel[0]] * (need - len(sel)) + sel
             S.last_fid = sel[-1][0]
             in_ids = [i for i, _ in sel]
             kw = {"input_frames": [f for _, f in sel], "strength": strength}
@@ -153,6 +161,8 @@ def gen_loop():
         t = time.perf_counter()
         frames = eng.step(**kw, abort=lambda: S.version != version or S.reset_req is not None)
         dt = time.perf_counter() - t
+        if frames is not None and not eng.stats.get("recache_ms"):
+            GEN_S[0] = dt if GEN_S[0] is None else 0.7 * GEN_S[0] + 0.3 * dt
         if frames is None:  # a change arrived mid-chunk: regenerate this position with the new input
             continue
         played = (time.perf_counter() - S.t0) / period
@@ -184,10 +194,13 @@ def enc_loop():
         else:
             frames, seq0, version, chunk, in_ids = item
             msgs = []
-            for i, f in enumerate(frames):
+            for i, f in enumerate(frames):  # send each frame as soon as it's encoded (not after the whole chunk)
                 ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(f, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, a.jpeg])
                 src = in_ids[min(i, len(in_ids) - 1)] if in_ids else 0xFFFFFFFF
-                msgs.append(struct.pack("<IIII", seq0 + i, version, chunk, src) + jpg.tobytes())
+                m = struct.pack("<IIII", seq0 + i, version, chunk, src) + jpg.tobytes()
+                if S.loop is not None and S.out is not None:
+                    S.loop.call_soon_threadsafe(S.out.put_nowait, m)
+            continue
         if S.loop is not None and S.out is not None:
             for m in msgs:
                 S.loop.call_soon_threadsafe(S.out.put_nowait, m)
@@ -206,7 +219,8 @@ async def handler(ws):
     print("[server] client connected", flush=True)
     await ws.send(json.dumps({"type": "config", "args": " ".join(sys.argv[1:]), "height": a.height, "width": a.width,
                               "ckpt": a.ckpt, "steps": a.steps, "sage": a.sage, "kvq": a.kvq,
-                              "clean_every": a.clean_every, "window": a.window, "fps": a.fps, "rope": a.rope}))
+                              "clean_every": a.clean_every, "window": a.window, "fps": a.fps, "rope": a.rope,
+                              "overlap": a.overlap, "ahead": a.ahead}))
 
     async def sender():
         while True:

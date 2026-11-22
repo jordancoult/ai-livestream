@@ -8,11 +8,12 @@ Reach it through an SSH tunnel (cloud/client/ll2_client.py does it). Protocol (o
      {"type": "image", "data": "<base64 png/jpg>", "prompt": "..."}   restart the stream from a reference image
      {"type": "reset", "prompt": "..."}                   restart (text only)
      {"type": "start", "prompt": ..., "mode": ..., "strength": ..., "image": optional base64}
+     {"type": "server", "args": "--ckpt S4 --sage ..."}   restart the server with these launch args (ll2_live.sh loop)
   client -> server  binary: b"F" + uint32 input id + JPEG webcam frame (v2v), b"M" + JPEG person mask (white = person; optional,
                     computed on the client with MediaPipe; used when "person" is on)
   server -> client  binary: 16-byte header (uint32 frame seq, prompt version, chunk, source input id or 0xFFFFFFFF)
                     + JPEG; the input id lets the client pair each output frame with the webcam frame it came from
-  server -> client  JSON {"type": "stats", ...} once per chunk
+  server -> client  JSON {"type": "stats", ...} once per chunk; {"type": "config", "args": ..., "height", "width"} on connect
 Generation runs one chunk ahead of the playout clock (fps), never more: every queued frame is latency.
 """
 
@@ -25,6 +26,7 @@ import struct
 import sys
 import threading
 import time
+from pathlib import Path
 from collections import deque
 
 import cv2
@@ -199,6 +201,9 @@ async def handler(ws):
     import websockets
     S.loop, S.out = asyncio.get_running_loop(), asyncio.Queue()
     print("[server] client connected", flush=True)
+    await ws.send(json.dumps({"type": "config", "args": " ".join(sys.argv[1:]), "height": a.height, "width": a.width,
+                              "ckpt": a.ckpt, "steps": a.steps, "sage": a.sage, "kvq": a.kvq,
+                              "clean_every": a.clean_every, "window": a.window, "fps": a.fps}))
 
     async def sender():
         while True:
@@ -221,6 +226,12 @@ async def handler(ws):
                 continue
             j = json.loads(msg)
             t = j.get("type")
+            if t == "server":  # restart with new launch args: ll2_live.sh relaunches us (exit code 75)
+                Path(os.environ.get("LL2_NEXT_ARGS", "/workspace/ll2_next_args")).write_text(str(j.get("args", "")).strip())
+                print(f"[server] restart requested with: {j.get('args')}", flush=True)
+                await ws.send(json.dumps({"type": "restarting", "args": j.get("args")}))
+                await ws.close()
+                os._exit(75)
             with S.lock:
                 if t in ("start", "reset", "image"):
                     S.prompt = j.get("prompt") or S.prompt

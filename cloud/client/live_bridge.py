@@ -42,6 +42,9 @@ p.add_argument("--input", default="/dev/video0", help="v4l2 device, a video file
                "(prompts you to paste a URL at start) "
                "(downloaded once to cloud/client/.cache; played in real time, looped)")
 p.add_argument("--input-size", default="1280x720", help="capture size for v4l2 devices")
+p.add_argument("--no-camera-fix", action="store_true", help="don't lock the v4l2 camera's frame rate (by default the "
+               "bridge sets exposure_dynamic_framerate=0 so a webcam keeps 30 fps in dim light instead of dropping to "
+               "~15-17, which caps the whole pipeline's fps)")
 p.add_argument("--output", default="/dev/video10", help="v4l2loopback device, .mp4 file or 'ffplay' (a window)")
 p.add_argument("--out-size", default=None, help="output WxH after resize (default: generation size)")
 p.add_argument("--ref", default=None, help="reference image (file or http(s) URL); omit for a prompt-only edit")
@@ -136,10 +139,25 @@ def crop_resize(frame, w, h):
     return frame[y:y + h, x:x + w]
 
 
+NET_SCHEMES = ("srt", "rtmp", "rtsp", "udp", "tcp")
+
+
 class Source:
+    """Input: a v4l2 camera, a live network stream (phone: srt:// / rtmp:// / rtsp:// / udp://, see
+    cloud/docs/iphone-camera.md) or a file/URL played in real time. Live sources are drained by a thread and read()
+    returns the newest frame; the measured input fps is in .fps()."""
     def __init__(self, spec):
         self.spec = spec
-        self.live = spec.startswith("/dev/video")
+        self.net = spec.split("://")[0].lower() in NET_SCHEMES
+        self.live = spec.startswith("/dev/video") or self.net
+        self.stamps = collections.deque(maxlen=90)
+        if self.net:
+            self.latest, self.n, self.n_read, self.proc = None, 0, 0, None
+            self.cv = threading.Condition()
+            threading.Thread(target=self._grab_net, daemon=True).start()
+            import atexit
+            atexit.register(lambda: self.proc and self.proc.poll() is None and self.proc.kill())
+            return
         self.cap = self._open() if self.live else cv2.VideoCapture(spec, cv2.CAP_ANY)
         if self.live and not self.cap.isOpened():
             print(f"[bridge] camera {spec} not available (busy? another page or app using it); retrying every 2 s",
@@ -156,7 +174,63 @@ class Source:
             self.cv = threading.Condition()
             threading.Thread(target=self._grab, daemon=True).start()
 
+    def fps(self):
+        """Fresh input frames per second over the last ~3 s (live sources), else None."""
+        st = list(self.stamps)
+        if len(st) < 10 or time.time() - st[-1] > 1.0:
+            return 0.0 if self.live and (not st or time.time() - st[-1] > 1.0) else None
+        return round((len(st) - 1) / (st[-1] - st[0]), 1)
+
+    def _net_url(self):
+        u = self.spec
+        if u.startswith("srt://") and "mode=" not in u and ("//0.0.0.0" in u or "//:" in u):
+            u += ("&" if "?" in u else "?") + "mode=listener"
+        return u
+
+    def _grab_net(self):
+        """Phone / network stream through the system ffmpeg (has SRT), scaled+cropped to 720p in the session's
+        orientation; reconnects (or re-listens) when the stream ends."""
+        iw, ih = (720, 1280) if args.portrait else (1280, 720)
+        u = self._net_url()
+        listen = ["-listen", "1"] if u.startswith("rtmp://") and ("//0.0.0.0" in u) else []
+        while True:
+            cmd = ["ffmpeg", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "500000",
+                   "-analyzeduration", "500000", *listen, "-i", u, "-an", "-vf",
+                   f"scale={iw}:{ih}:force_original_aspect_ratio=increase,crop={iw}:{ih}", "-f", "rawvideo",
+                   "-pix_fmt", "bgr24", "-"]
+            print(f"[bridge] waiting for the stream on {u}", flush=True)
+            self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
+            got = 0
+            while True:
+                buf = self.proc.stdout.read(iw * ih * 3)
+                if len(buf) < iw * ih * 3:
+                    break
+                if not got:
+                    print("[bridge] stream connected", flush=True)
+                got += 1
+                f = np.frombuffer(buf, np.uint8).reshape(ih, iw, 3)
+                self.stamps.append(time.time())
+                with self.cv:
+                    self.latest, self.n = f, self.n + 1
+                    self.cv.notify_all()
+            self.proc.kill()
+            print(f"[bridge] stream ended after {got} frames; waiting again", flush=True)
+            time.sleep(1)
+
+    def _camera_fix(self):
+        if args.no_camera_fix:
+            return
+        dev = self.spec if not self.spec[10:].isdigit() else self.spec
+        try:  # keep 30 fps in dim light (default on most UVC cams, but some ship / get set with it on)
+            r = subprocess.run(["v4l2-ctl", "-d", dev, "-c", "exposure_dynamic_framerate=0"], capture_output=True,
+                               text=True, timeout=5)
+            if r.returncode == 0:
+                print(f"[bridge] {dev}: frame rate locked (exposure_dynamic_framerate=0)", flush=True)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
     def _open(self):
+        self._camera_fix()
         cap = cv2.VideoCapture(self.spec, cv2.CAP_V4L2)
         if not cap.isOpened() and self.spec[10:].isdigit():  # some setups only open by index
             cap = cv2.VideoCapture(int(self.spec[10:]), cv2.CAP_V4L2)
@@ -165,6 +239,7 @@ class Source:
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, iw)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, ih)
+            cap.set(cv2.CAP_PROP_FPS, 30)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         return cap
 
@@ -186,6 +261,7 @@ class Source:
                 time.sleep(0.01)
                 continue
             fails = 0
+            self.stamps.append(time.time())
             with self.cv:
                 self.latest, self.n = f, self.n + 1
                 self.cv.notify_all()
@@ -518,7 +594,8 @@ async def main():
                       "repeated": stats["repeated"], "dropped": stats["dropped"], "server_fps": round(sfps, 1),
                       "g2g_ms": round(l[len(l) // 2]) if l else None,
                       "session": {k: start.get(k) for k in ("kv_reset_frames", "freeze_kv_on_static", "detection_mode")},
-                      "facefix_available": ff is not None, "facefix_on": sess["ff_on"]}
+                      "facefix_available": ff is not None, "facefix_on": sess["ff_on"], "input_fps": src.fps(),
+                      "input_live": src.live}
                 if ff is not None:
                     ms = sorted(ff.ms)
                     tot = ff.stats["hit"] + ff.stats["miss"]
@@ -747,7 +824,8 @@ async def main():
                             fx = (f" facefix hit {ff.stats['hit']}/{tot}" +
                                   (f" render {ms[len(ms) // 2]:.0f} ms" if ms else ""))
                         print(f"[bridge] played {stats['played']} repeated {stats['repeated']} dropped {stats['dropped']} "
-                              f"queue {len(queue)} glass-to-glass median {l[len(l) // 2]:.0f} ms{fx}" if l else "",
+                              f"queue {len(queue)} glass-to-glass median {l[len(l) // 2]:.0f} ms{fx}"
+                              + (f" input {src.fps()} fps" if src.live else "") if l else "",
                               flush=True)
 
             try:

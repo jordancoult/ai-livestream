@@ -35,6 +35,8 @@ p.add_argument("--ssh", default=None, help="ssh command to the GPU box; opens a 
 p.add_argument("--ssh-key", default=os.path.expanduser("~/personal/ai-livestream/.secrets/runpod_ed25519"))
 p.add_argument("--local-port", type=int, default=8765)
 p.add_argument("--web-port", type=int, default=8780)
+p.add_argument("--host", default="127.0.0.1", help="0.0.0.0 = also reachable from other devices on your network "
+               "(phone: http://<laptop IP>:8780). No login: anyone on the network can control the stream")
 p.add_argument("--input", default="/dev/video0", help="webcam (or a video file) used in v2v mode")
 p.add_argument("--prompt", default="a cinematic shot of a cozy living room, warm light")
 p.add_argument("--mode", default="t2v", choices=["t2v", "v2v"])
@@ -633,9 +635,17 @@ async def main():
     global CMDS, LOOP
     CMDS, LOOP = asyncio.Queue(), asyncio.get_running_loop()
     tunnel = open_tunnel()
-    srv = ThreadingHTTPServer(("127.0.0.1", a.web_port), Web)
+    srv = ThreadingHTTPServer((a.host, a.web_port), Web)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     log(f"web UI: http://127.0.0.1:{a.web_port}")
+    if a.host == "0.0.0.0":
+        import socket
+        try:
+            sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sk.connect(("10.255.255.255", 1))  # no packet sent: picks the LAN interface
+            log(f"on your network (phone): http://{sk.getsockname()[0]}:{a.web_port}")
+        except OSError:
+            pass
     try:
         await asyncio.gather(session_loop(), player())
     finally:

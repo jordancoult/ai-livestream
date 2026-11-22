@@ -45,12 +45,13 @@ def _log(msg):
 
 class LL2Engine:
     def __init__(self, height=576, width=1024, ckpt="S2", steps=None, kv_quant=True, local_attn=32, block=8,
-                 sage=False, compile=True, clean_every=1, t5_device="cuda", seed=0, recache_frames=16):
+                 sage=False, compile=True, clean_every=1, t5_device="cuda", seed=0, recache_frames=16, rope="absolute"):
         """ckpt: S2 (2-step) | S4 (4-step) | path. block: latent frames per chunk (8 = native = 32 video frames;
         4 halves the reaction latency). clean_every: 1 = clean KV pass every chunk (best consistency), 2 = every
         2nd, 0 = never. sage: SageAttention 2 (faster, slightly less exact)."""
         cwd = os.getcwd()
         os.chdir(REPO)  # upstream uses relative wan_models/ paths
+        self.rope = rope
         try:
             self._build(height, width, ckpt, steps, kv_quant, local_attn, block, sage, compile, clean_every,
                         t5_device, seed)
@@ -138,6 +139,13 @@ class LL2Engine:
 
         self.pipe.text_encoder = CachedText()
         setup_nvfp4_pipeline(self.pipe, self.config, dev)
+        # Upstream's RoPE table has 1024 temporal positions: the stream would crash at latent frame 1024 (chunk 128,
+        # ~2:50 of video). Same frequencies, 64k positions (~3 h at 24 fps); positions < 1024 are bit-identical.
+        dit = self.pipe._dit_model
+        rp = sys.modules[type(dit).__module__].rope_params
+        d = dit.dim // dit.num_heads
+        dit.freqs = torch.cat([rp(65536, d - 4 * (d // 6)), rp(65536, 2 * (d // 6)), rp(65536, 2 * (d // 6))],
+                              dim=1).to(dit.freqs.device)
         self.pipe.generator.model.eval().requires_grad_(False)
         if compile:
             ok = self.pipe.generator.configure_torch_compile(mode="default", dynamic=False, suppress_errors=True)
@@ -202,7 +210,10 @@ class LL2Engine:
             dit.rope_method = p._rope_method_override
         if p._original_seq_len_override is not None:
             dit.original_seq_len = p._original_seq_len_override
-        dit.use_relative_rope = p.use_relative_rope
+        # rope: 'relative' = window-relative positions (sink + window laid out contiguously every chunk, raw K in the
+        # cache): positions stay bounded, but the model wasn't trained that way: drifts sooner (2026-11-22 test).
+        # 'absolute' = upstream (positions keep counting; table extended in _build so it never runs out).
+        dit.use_relative_rope = p.use_relative_rope = (self.rope == "relative")
         dit.rope_temporal_offset = 0.0
         self.shot = 0
         self.start = 0          # current_start_frame (latent frames, RoPE position)

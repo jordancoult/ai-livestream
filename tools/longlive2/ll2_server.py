@@ -51,6 +51,8 @@ p.add_argument("--fps", type=float, default=24.0)
 p.add_argument("--ahead", type=int, default=34, help="unplayed frames kept at the client (in flight + queued) before the "
                "next chunk starts: must cover one chunk's generation (~24 frames at 24 fps) + jitter")
 p.add_argument("--jpeg", type=int, default=90)
+p.add_argument("--rope", default="absolute", choices=["absolute", "relative"], help="temporal positions: absolute = upstream "
+               "(table extended: runs for hours); relative = window-relative (bounded, but drifts sooner)")
 p.add_argument("--recache-frames", type=int, default=16, help="latent frames rebuilt under a new prompt (0 = off)")
 p.add_argument("--prompt", default="a cinematic shot of a cozy living room, warm light")
 a = p.parse_args()
@@ -59,7 +61,7 @@ from ll2_stream import LL2Engine  # noqa: E402
 
 eng = LL2Engine(height=a.height, width=a.width, ckpt=a.ckpt, steps=a.steps, kv_quant=a.kvq, local_attn=a.window,
                 block=a.block, sage=a.sage, compile=not a.no_compile, clean_every=a.clean_every,
-                recache_frames=max(1, a.recache_frames))
+                recache_frames=max(1, a.recache_frames), rope=a.rope)
 FPC = 4 * a.block  # video frames per chunk
 
 
@@ -203,7 +205,7 @@ async def handler(ws):
     print("[server] client connected", flush=True)
     await ws.send(json.dumps({"type": "config", "args": " ".join(sys.argv[1:]), "height": a.height, "width": a.width,
                               "ckpt": a.ckpt, "steps": a.steps, "sage": a.sage, "kvq": a.kvq,
-                              "clean_every": a.clean_every, "window": a.window, "fps": a.fps}))
+                              "clean_every": a.clean_every, "window": a.window, "fps": a.fps, "rope": a.rope}))
 
     async def sender():
         while True:

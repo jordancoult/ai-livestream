@@ -270,6 +270,8 @@ def server_args(s: dict) -> str:
                     ("jpeg", "--jpeg"), ("recache_frames", "--recache-frames")):
         if s.get(k) not in (None, ""):
             args.append(f"{flag} {int(s[k])}")
+    if s.get("rope") == "relative":
+        args.append("--rope relative")
     return " ".join(args)
 
 
@@ -440,6 +442,7 @@ button.warn{background:#3a2c14;border-color:var(--warn);color:var(--warn)}
   <label>Work ahead</label><select id="ahead"><option value="34">1 chunk (low latency)</option><option value="48">1.5 chunks</option><option value="64">2 chunks (smooth, +1.3 s)</option></select>
   <label>JPEG quality</label><select id="jpeg"><option>95</option><option>90</option><option>80</option><option>70</option></select>
   <label>Prompt re-cache</label><select id="recache_frames"><option value="16">16 frames (default)</option><option value="32">32 (stronger, slower)</option><option value="8">8</option><option value="0">off (fast, weak change)</option></select>
+ <label>Positions</label><select id="rope"><option value="absolute">absolute (upstream)</option><option value="relative">window-relative (experimental)</option></select>
  </div><div class="row"><button class="warn" id="restart">Restart server with these settings</button></div>
  <div class="muted">Restart takes ~1 min (warm-up). If a setting crashes the server (e.g. out of memory) it falls back to the last working settings.</div></div>
  <div class="card"><h2>Local (instant)</h2><div class="grid2">
@@ -464,7 +467,7 @@ function stat(){ if(!S) return; const c=S.cfg, pf=S.local.fps==='auto'?(c.fps||2
   $('ckpt').value=c2.ckpt||'S2'; $('steps').value=c2.steps||''; $('sage').value=c2.sage?'1':'0'; $('kvq').value=c2.kvq===false?'0':'1';
   $('clean_every').value=c2.clean_every||1; $('window').value=c2.window||32;
   const ar=(c2.args||'').match(/--ahead (\d+)/), jq=(c2.args||'').match(/--jpeg (\d+)/), rc=(c2.args||'').match(/--recache-frames (\d+)/);
-  $('ahead').value=ar?ar[1]:'34'; $('jpeg').value=jq?jq[1]:'90'; $('recache_frames').value=rc?rc[1]:'16';
+  $('ahead').value=ar?ar[1]:'34'; $('jpeg').value=jq?jq[1]:'90'; $('recache_frames').value=rc?rc[1]:'16'; $('rope').value=c2.rope||'absolute';
   $('upscale').value=S.local.upscale; $('sharp').value=S.local.sharp; $('fps').value=S.local.fps; $('buffer').value=S.local.buffer;
   $('img').innerHTML=S.assets.map(f=>`<option>${f}</option>`).join(''); }
  $('strv').textContent=(+$('strength').value).toFixed(2); $('shv').textContent=(+$('sharp').value).toFixed(2); }
@@ -481,7 +484,7 @@ $('imggo').onclick=()=>post('/cmd',{image:$('img').value}).then(r=>!r.ok&&alert(
 $('imgurl').onkeydown=e=>{ if(e.key==='Enter'&&$('imgurl').value.trim()) post('/cmd',{image:$('imgurl').value.trim()}).then(r=>{ if(r.ok) $('imgurl').value=''; else alert('Image not used: '+r.error); }); };
 $('restart').onclick=()=>{ const [w,h]=$('res').value.split('x').map(Number), port=$('ori').value==='port';
  const s={height:port?w:h,width:port?h:w,ckpt:$('ckpt').value,steps:$('steps').value,sage:$('sage').value==='1',kvq:$('kvq').value==='1',
-  clean_every:$('clean_every').value,window:$('window').value,ahead:$('ahead').value,jpeg:$('jpeg').value,recache_frames:$('recache_frames').value};
+  clean_every:$('clean_every').value,window:$('window').value,ahead:$('ahead').value,jpeg:$('jpeg').value,recache_frames:$('recache_frames').value,rope:$('rope').value};
  if(confirm('Restart the server with these settings? The stream stops for ~1 min.')) post('/server',s).then(()=>{formInit=false;}); };
 for(const id of ['upscale','sharp','fps','buffer']) $(id).onchange=()=>post('/local',{[id]:$(id).value}); $('sharp').oninput=stat;
 </script></body></html>"""

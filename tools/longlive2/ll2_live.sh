@@ -5,7 +5,7 @@
 #   setsid nohup bash /workspace/tools/longlive2/ll2_live.sh > /workspace/ll2_live.log 2>&1 &
 cd /workspace
 NEXT=/workspace/ll2_next_args GOOD=/workspace/ll2_good_args
-[ -f "$GOOD" ] || echo "${LL2_DEFAULT_ARGS:---ckpt S2 --kvq --height 704 --width 1280}" > "$GOOD"
+[ -f "$GOOD" ] || echo "${LL2_DEFAULT_ARGS:---hw 5090}" > "$GOOD"   # the tuned 5090 profile (ll2_server.py --hw)
 while true; do
   if [ -f "$NEXT" ]; then ARGS=$(cat "$NEXT"); rm -f "$NEXT"; else ARGS=$(cat "$GOOD"); fi
   touch /workspace/.heartbeat

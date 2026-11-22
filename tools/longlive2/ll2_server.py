@@ -43,8 +43,13 @@ p.add_argument("--ckpt", default="S2")
 p.add_argument("--steps", type=int, default=None)
 p.add_argument("--block", type=int, default=8, help="latent frames per chunk (8 native; 4 halves latency)")
 p.add_argument("--window", type=int, default=32)
-p.add_argument("--kvq", action="store_true", help="NVFP4 KV cache (less memory; bf16 KV is faster on a 5090)")
-p.add_argument("--sage", action="store_true")
+p.add_argument("--kvq", action=argparse.BooleanOptionalAction, default=False,
+               help="NVFP4 KV cache (needed at 1280x704 on 32 GB); --no-kvq = bf16")
+p.add_argument("--sage", action=argparse.BooleanOptionalAction, default=False, help="SageAttention (--no-sage = exact)")
+p.add_argument("--hw", default="5090", choices=["5090", "none"], help="hardware profile for every setting not given on the "
+               "command line. 5090 (default) = the tuned RTX 5090 run (2026-11-22): S4, 576x1024 portrait, Sage, NVFP4 KV, "
+               "clean every chunk, window 32, auto ahead, JPEG 80, re-cache 16 (~28 fps in text mode). none = the plain "
+               "defaults below (S2, 1024x576, exact attention, bf16 KV, JPEG 90)")
 p.add_argument("--no-compile", action="store_true")
 p.add_argument("--clean-every", type=int, default=1)
 p.add_argument("--fps", type=float, default=24.0)
@@ -58,6 +63,11 @@ p.add_argument("--rope", default="absolute", choices=["absolute", "relative"], h
                "(table extended: runs for hours); relative = window-relative (bounded, but drifts sooner)")
 p.add_argument("--recache-frames", type=int, default=16, help="latent frames rebuilt under a new prompt (0 = off)")
 p.add_argument("--prompt", default="a cinematic shot of a cozy living room, warm light")
+HW_PROFILES = {"5090": dict(ckpt="S4", height=1024, width=576, sage=True, kvq=True, clean_every=1, window=32, ahead=-1,
+                            overlap=0, jpeg=80, recache_frames=16)}
+_pre = p.parse_known_args()[0]
+if _pre.hw in HW_PROFILES:
+    p.set_defaults(**HW_PROFILES[_pre.hw])  # explicit flags still win
 a = p.parse_args()
 
 from ll2_stream import LL2Engine  # noqa: E402

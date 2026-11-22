@@ -38,7 +38,7 @@ p.add_argument("--image", default=None, help="reference image: the stream starts
 p.add_argument("--prompt", default="a cinematic shot of a cozy living room, warm light")
 p.add_argument("--strength", type=float, default=0.7)
 p.add_argument("--person", action="store_true", help="v2v: keep the person (low noise), regenerate the rest")
-p.add_argument("--size", default="1024x576", help="input frames are cropped/resized to this (match the server)")
+p.add_argument("--size", default="576x1024", help="input frames are cropped/resized to this (match the server)")
 p.add_argument("--fps", type=float, default=24.0)
 p.add_argument("--buffer", type=int, default=6, help="frames buffered before playout starts")
 p.add_argument("--output", default="ffplay", help="ffplay, an .mp4 path, or 'ffplay,out.mp4'")

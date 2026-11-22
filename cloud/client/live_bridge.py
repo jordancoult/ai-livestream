@@ -138,13 +138,12 @@ def crop_resize(frame, w, h):
 
 class Source:
     def __init__(self, spec):
+        self.spec = spec
         self.live = spec.startswith("/dev/video")
-        self.cap = cv2.VideoCapture(spec, cv2.CAP_V4L2 if self.live else cv2.CAP_ANY)
-        if self.live:
-            iw, ih = map(int, args.input_size.split("x"))
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, iw)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, ih)
+        self.cap = self._open() if self.live else cv2.VideoCapture(spec, cv2.CAP_ANY)
+        if self.live and not self.cap.isOpened():
+            print(f"[bridge] camera {spec} not available (busy? another page or app using it); retrying every 2 s",
+                  flush=True)
         self.src_fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
         self.t0 = time.time()
         self.i = 0
@@ -157,12 +156,36 @@ class Source:
             self.cv = threading.Condition()
             threading.Thread(target=self._grab, daemon=True).start()
 
+    def _open(self):
+        cap = cv2.VideoCapture(self.spec, cv2.CAP_V4L2)
+        if not cap.isOpened() and self.spec[10:].isdigit():  # some setups only open by index
+            cap = cv2.VideoCapture(int(self.spec[10:]), cv2.CAP_V4L2)
+        if cap.isOpened():
+            iw, ih = map(int, args.input_size.split("x"))
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, iw)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, ih)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        return cap
+
     def _grab(self):
+        fails = 0
         while True:
+            if not self.cap.isOpened():
+                time.sleep(2)
+                self.cap = self._open()
+                if self.cap.isOpened():
+                    print(f"[bridge] camera {self.spec} opened", flush=True)
+                continue
             ok, f = self.cap.read()
             if not ok:
+                fails += 1
+                if fails > 300:  # ~3 s of failed reads: reopen
+                    self.cap.release()
+                    fails = 0
                 time.sleep(0.01)
                 continue
+            fails = 0
             with self.cv:
                 self.latest, self.n = f, self.n + 1
                 self.cv.notify_all()

@@ -49,7 +49,7 @@ if a.ssh and a.url == "ws://127.0.0.1:8765":  # connect through our own tunnel's
 
 ASSETS = Path(__file__).resolve().parents[2] / "assets"
 LOCK = threading.Lock()
-CFG = {"height": 704, "width": 1280}  # server config (from its "config" message)
+CFG = {"height": 1024, "width": 576}  # server config (from its "config" message)
 ST = {"warning": "", "prompt": a.prompt, "mode": a.mode, "strength": a.strength, "person": a.person, "spread": False, "status": "starting",
       "gen_fps": None, "gen_ms": None, "ahead": None, "change_latency": None, "message": "", "version": 0,
       "played": 0, "repeated": 0, "snapped": 0}
@@ -326,10 +326,8 @@ def server_args(s: dict) -> str:
     args = [f"--ckpt {s.get('ckpt', 'S2')}", f"--height {int(s['height'])}", f"--width {int(s['width'])}"]
     if s.get("steps"):
         args.append(f"--steps {int(s['steps'])}")
-    if s.get("sage"):
-        args.append("--sage")
-    if s.get("kvq", True):
-        args.append("--kvq")
+    args.append("--sage" if s.get("sage") else "--no-sage")  # explicit: the server's 5090 profile defaults to Sage
+    args.append("--kvq" if s.get("kvq", True) else "--no-kvq")
     for k, flag in (("clean_every", "--clean-every"), ("window", "--window"), ("ahead", "--ahead"), ("overlap", "--overlap"),
                     ("jpeg", "--jpeg"), ("recache_frames", "--recache-frames")):
         if s.get(k) not in (None, ""):

@@ -180,7 +180,7 @@ def fetch_image(src: str):
         raw = (ASSETS / Path(src).name).read_bytes()
         label = Path(src).name
     if src.startswith("data:"):
-        label = "pasted image"
+        label = "uploaded image"
     crop_image(raw)  # validate now (readable error)
     return raw, label
 
@@ -481,6 +481,8 @@ button.warn{background:#3a2c14;border-color:var(--warn);color:var(--warn)}
   <div class="muted">Webcam strength: 0.85 keeps your room (faster), 0.95+ new scene (slower). Person keep: try 0.98.</div>
   <div class="row"><label>Start image</label><select id="img"></select><button id="imggo">Start from it</button></div>
   <div class="row"><input id="imgurl" placeholder="or paste an image link (Google Images ok) + Enter: memory only, never saved" style="flex:1"></div>
+  <div class="row"><label class="btn" for="imgfile" style="border:1px solid var(--line);border-radius:6px;padding:5px 8px;background:#1f2633;color:var(--fg);cursor:pointer">Upload / choose photo</label>
+   <input type="file" id="imgfile" accept="image/*" style="display:none"><span class="muted">or paste an image anywhere on the page</span></div>
   <div class="row"><span class="muted" id="startimg"></span><button id="imgclear">Clear</button></div></div>
  <div class="card"><h2>Server settings</h2><div class="grid2">
   <label>Resolution</label><select id="res"><option value="1280x704">1280×704 (native, 720p)</option><option value="1024x576">1024×576 (fast)</option><option value="960x544">960×544</option><option value="832x480">832×480</option></select>
@@ -542,6 +544,11 @@ $('prompt').onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault();
 $('mode').onchange=()=>post('/cmd',{set:{mode:$('mode').value}});
 $('person').onchange=()=>post('/cmd',{set:{person:$('person').checked}});
 $('strength').onchange=()=>post('/cmd',{set:{strength:+$('strength').value}}); $('strength').oninput=stat;
+function sendImageFile(f){ if(!f||!f.type.startsWith('image/')) return; if(f.size>25e6){ alert('Image larger than 25 MB'); return; }
+ const r=new FileReader(); r.onload=()=>post('/cmd',{image:r.result}).then(x=>{ if(!x.ok) alert('Image not used: '+x.error); }); r.readAsDataURL(f); }
+$('imgfile').onchange=e=>{ sendImageFile(e.target.files[0]); e.target.value=''; };
+document.addEventListener('paste',e=>{ if(e.target&&e.target.id==='prompt') return; const it=[...(e.clipboardData||{}).items||[]].find(i=>i.type.startsWith('image/'));
+ if(it){ e.preventDefault(); sendImageFile(it.getAsFile()); } });
 $('imgclear').onclick=()=>post('/cmd',{clear_image:true});
 $('imggo').onclick=()=>post('/cmd',{image:$('img').value}).then(r=>!r.ok&&alert(r.error));
 $('imgurl').onkeydown=e=>{ if(e.key==='Enter'&&$('imgurl').value.trim()) post('/cmd',{image:$('imgurl').value.trim()}).then(r=>{ if(r.ok) $('imgurl').value=''; else alert('Image not used: '+r.error); }); };

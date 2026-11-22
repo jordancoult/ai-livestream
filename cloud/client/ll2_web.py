@@ -50,7 +50,7 @@ if a.ssh and a.url == "ws://127.0.0.1:8765":  # connect through our own tunnel's
 ASSETS = Path(__file__).resolve().parents[2] / "assets"
 LOCK = threading.Lock()
 CFG = {"height": 704, "width": 1280}  # server config (from its "config" message)
-ST = {"prompt": a.prompt, "mode": a.mode, "strength": a.strength, "person": a.person, "spread": False, "status": "starting",
+ST = {"warning": "", "prompt": a.prompt, "mode": a.mode, "strength": a.strength, "person": a.person, "spread": False, "status": "starting",
       "gen_fps": None, "gen_ms": None, "ahead": None, "change_latency": None, "message": "", "version": 0,
       "played": 0, "repeated": 0, "snapped": 0}
 LOCAL = {"upscale": 0, "sharp": 0.0, "fps": "auto", "buffer": 4}
@@ -347,7 +347,14 @@ async def session(ws):
                 Q.clear()
             CFG.update(j)
             ST["status"] = "streaming"
-            log(f"server: {j['args']}")
+            req = ST.pop("requested", None)
+            if req and sorted(req.split()) != sorted(j["args"].split()):
+                ST["warning"] = ("Your new settings crashed the server (most likely out of GPU memory, e.g. bf16 KV at "
+                                 "this size), so it fell back to the last working settings: " + j["args"])
+                log(ST["warning"])
+            else:
+                ST["warning"] = ""
+                log(f"server: {j['args']}")
     except (asyncio.TimeoutError, ValueError, TypeError):
         pass
     start = {"type": "start", "prompt": ST["prompt"], "mode": ST["mode"], "strength": ST["strength"], "person": ST["person"]}
@@ -426,6 +433,7 @@ async def session(ws):
                 msg = {"type": "image", "data": base64.b64encode(c["image"]).decode(), "prompt": ST["prompt"]}
             elif "server" in c:
                 msg = {"type": "server", "args": c["server"]}
+                ST["requested"] = c["server"]
                 ST["status"] = "server restarting (warm-up ~1 min)"
             if msg is None:
                 continue
@@ -518,7 +526,7 @@ button.warn{background:#3a2c14;border-color:var(--warn);color:var(--warn)}
   <label>Checkpoint</label><select id="ckpt"><option value="S2">S2 (2-step)</option><option value="S4">S4 (4-step, richer, slower)</option></select>
   <label>Steps</label><select id="steps"><option value="">checkpoint default</option><option>1</option><option>2</option><option>3</option><option>4</option><option>6</option><option>8</option></select>
   <label>Attention</label><select id="sage"><option value="0">Exact (best quality)</option><option value="1">SageAttention (fast, may smear)</option></select>
-  <label>KV cache</label><select id="kvq"><option value="1">4-bit NVFP4 (fits 32 GB)</option><option value="0">bf16 (faster, may run out of memory)</option></select>
+  <label>KV cache</label><select id="kvq"><option value="1">4-bit NVFP4 (fits 32 GB)</option><option value="0">bf16 (out of memory at 1280×704 / 704×1280)</option></select>
   <label>Clean pass</label><select id="clean_every"><option value="1">every chunk (best)</option><option value="2">every 2nd (faster)</option><option value="3">every 3rd</option></select>
   <label>Memory window</label><select id="window"><option>32</option><option>28</option><option>24</option><option>20</option><option>16</option></select>
   <label>Chunk</label><select id="overlap"><option value="0">8 latents / 32 frames (stock)</option><option value="4">overlap 4: 16 frames (half latency, 2x compute)</option><option value="2">overlap 2: 24 frames</option></select>
@@ -544,7 +552,7 @@ const post=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/js
 function msg(t){S&&(S.message=t)}
 function stat(){ if(!S) return; const c=S.cfg, pf=S.local.fps==='auto'?(c.fps||24):S.local.fps==='match'?Math.min(c.fps||24,+((S.gen_fps||24)*0.97).toFixed(1)):+S.local.fps, g=S.gen_fps;
  const gcls=g==null?'':(g>=pf*1.03?'ok':g>=pf*0.97?'warn':'bad');
- $('stat').innerHTML=`<b>Status</b><span>${S.status}</span><b>Server</b><span>${c.width}×${c.height}, ${c.ckpt||''}${c.steps?' '+c.steps+' steps':''}, ${c.sage?'Sage':'exact'} attention, KV ${c.kvq?'4-bit':'bf16'}, clean every ${c.clean_every}, window ${c.window}</span>
+ $('stat').innerHTML=(S.warning?`<b class="bad">Warning</b><span class="bad">${S.warning}</span>`:'')+`<b>Status</b><span>${S.status}</span><b>Server</b><span>${c.width}×${c.height}, ${c.ckpt||''}${c.steps?' '+c.steps+' steps':''}, ${c.sage?'Sage':'exact'} attention, KV ${c.kvq?'4-bit':'bf16'}, clean every ${c.clean_every}, window ${c.window}</span>
  <b>Generation</b><span class="${gcls}">${g??'–'} fps</span><b>Playout</b><span>${pf} fps · buffer ${S.buffer} · repeated ${S.repeated}</span>
  <b>Last change</b><span>${S.change_latency??'–'} s</span><b>Last</b><span class="muted">${S.message||''}</span>`;
  $('incard').style.display=S.mode==='v2v'?'':'none'; if(S.mode==='v2v' && !$('in').src.includes('/stream/in')) $('in').src='/stream/in?'+Date.now();

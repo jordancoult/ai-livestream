@@ -42,6 +42,8 @@ p.add_argument("--strength", type=float, default=0.9)
 p.add_argument("--person", action="store_true")
 p.add_argument("--output", default="", help="extra outputs: /dev/video10, ffplay, out.mp4 (comma-separated)")
 a = p.parse_args()
+if a.ssh and a.url == "ws://127.0.0.1:8765":  # connect through our own tunnel's local port
+    a.url = f"ws://127.0.0.1:{a.local_port}"
 
 ASSETS = Path(__file__).resolve().parents[2] / "assets"
 LOCK = threading.Lock()
@@ -461,7 +463,7 @@ function stat(){ if(!S) return; const c=S.cfg, pf=S.local.fps==='auto'?(c.fps||2
  $('stat').innerHTML=`<b>Status</b><span>${S.status}</span><b>Server</b><span>${c.width}×${c.height}, ${c.ckpt||''}${c.steps?' '+c.steps+' steps':''}, ${c.sage?'Sage':'exact'} attention, KV ${c.kvq?'4-bit':'bf16'}, clean every ${c.clean_every}, window ${c.window}</span>
  <b>Generation</b><span class="${gcls}">${g??'–'} fps</span><b>Playout</b><span>${pf} fps · buffer ${S.buffer} · repeated ${S.repeated}</span>
  <b>Last change</b><span>${S.change_latency??'–'} s</span><b>Last</b><span class="muted">${S.message||''}</span>`;
- $('incard').style.display=S.mode==='v2v'?'':'none'; if(S.mode==='v2v' && !$('in').src.endsWith('/stream/in')) $('in').src='/stream/in';
+ $('incard').style.display=S.mode==='v2v'?'':'none'; if(S.mode==='v2v' && !$('in').src.includes('/stream/in')) $('in').src='/stream/in?'+Date.now();
  if(!formInit){ formInit=true; const c2=S.cfg; $('prompt').value=S.prompt; $('mode').value=S.mode; $('person').checked=S.person; $('strength').value=S.strength;
   const port=c2.height>c2.width, w=port?c2.height:c2.width, h=port?c2.width:c2.height; $('res').value=`${w}x${h}`; $('ori').value=port?'port':'land';
   $('ckpt').value=c2.ckpt||'S2'; $('steps').value=c2.steps||''; $('sage').value=c2.sage?'1':'0'; $('kvq').value=c2.kvq===false?'0':'1';
@@ -471,7 +473,12 @@ function stat(){ if(!S) return; const c=S.cfg, pf=S.local.fps==='auto'?(c.fps||2
   $('upscale').value=S.local.upscale; $('sharp').value=S.local.sharp; $('fps').value=S.local.fps; $('buffer').value=S.local.buffer;
   $('img').innerHTML=S.assets.map(f=>`<option>${f}</option>`).join(''); }
  $('strv').textContent=(+$('strength').value).toFixed(2); $('shv').textContent=(+$('sharp').value).toFixed(2); }
-async function poll(){ try{ S=await (await fetch('/state')).json(); stat(); }catch(e){} }
+let down=false;
+function reattach(){ const t=Date.now(); $('out').src='/stream/out?'+t; if(S&&S.mode==='v2v') $('in').src='/stream/in?'+t; }
+async function poll(){ try{ S=await (await fetch('/state')).json(); if(down){ down=false; formInit=false; reattach(); } stat(); }
+ catch(e){ if(!down){ down=true; if(S) S.status='local script not running (waiting for it...)'; stat(); } } }
+$('out').onerror=()=>setTimeout(()=>{ if(!down) $('out').src='/stream/out?'+Date.now(); },1000);
+$('in').onerror=()=>setTimeout(()=>{ if(!down&&S&&S.mode==='v2v') $('in').src='/stream/in?'+Date.now(); },1000);
 setInterval(poll,700); poll();
 $('smooth').onclick=()=>post('/cmd',{prompt:$('prompt').value});
 $('cut').onclick=()=>post('/cmd',{prompt:$('prompt').value,cut:true});
@@ -514,7 +521,7 @@ class Web(BaseHTTPRequestHandler):
             assets = sorted(f.name for f in ASSETS.glob("*") if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"))
             self._json({**ST, "cfg": CFG, "local": LOCAL, "buffer": len(Q), "assets": assets})
         elif self.path.startswith("/stream/"):
-            key = self.path.split("/")[2]
+            key = self.path.split("/")[2].split("?")[0]
             self.send_response(200)
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
             self.end_headers()

@@ -202,6 +202,7 @@ def decode_image(b64):
 async def handler(ws):
     import websockets
     S.loop, S.out = asyncio.get_running_loop(), asyncio.Queue()
+    my_out = S.out
     print("[server] client connected", flush=True)
     await ws.send(json.dumps({"type": "config", "args": " ".join(sys.argv[1:]), "height": a.height, "width": a.width,
                               "ckpt": a.ckpt, "steps": a.steps, "sage": a.sage, "kvq": a.kvq,
@@ -260,8 +261,9 @@ async def handler(ws):
     except websockets.ConnectionClosed:
         pass
     finally:
-        S.running, S.out = False, None
         st.cancel()
+        if S.out is my_out:  # only if no newer client has taken over
+            S.running, S.out = False, None
         print("[server] client disconnected", flush=True)
 
 

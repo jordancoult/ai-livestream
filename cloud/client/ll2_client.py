@@ -48,6 +48,8 @@ p.add_argument("--no-snap", action="store_true", help="keep playing queued frame
                "(default: drop them as soon as the new prompt's frames arrive = lowest latency)")
 p.add_argument("--side-by-side", action="store_true", help="recording: input | output (v2v)")
 a = p.parse_args()
+if a.ssh and a.url == "ws://127.0.0.1:8765":  # connect through our own tunnel's local port
+    a.url = f"ws://127.0.0.1:{a.local_port}"
 W, H = (int(v) for v in a.size.split("x"))
 
 

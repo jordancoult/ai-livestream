@@ -147,11 +147,12 @@ SEG = {"seg": None}
 
 
 # ---------------------------------------------------------------- start images (memory only)
-def load_image(src: str) -> bytes:
-    """An assets/ file name, an http(s) link (Google Images result links unwrapped) or a data: URL -> PNG bytes,
-    centre-cropped to the server aspect and resized to its size. Kept in memory only."""
-    from PIL import Image
+START = {"raw": None, "label": ""}  # current start image: raw bytes in RAM only (never written to disk, here or on the box)
 
+
+def fetch_image(src: str):
+    """An assets/ file name, an http(s) link (Google Images result links unwrapped) or a data: URL -> (raw bytes,
+    label). Memory only."""
     src = src.strip()
     if src.startswith("data:"):
         raw = base64.b64decode(src.split(",", 1)[1])
@@ -164,12 +165,28 @@ def load_image(src: str) -> bytes:
                     src = qs[k][0]
                     break
         req = urllib.request.Request(src, headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)", "Accept": "image/*,*/*"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            raw = r.read(25 * 2**20 + 1)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                raw = r.read(25 * 2**20 + 1)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"download failed ({getattr(exc, 'code', '') or type(exc).__name__}): "
+                             f"{getattr(exc, 'reason', exc)}")
         if len(raw) > 25 * 2**20:
             raise ValueError("image larger than 25 MB")
+        label = "link: " + urllib.parse.urlparse(src).netloc
     else:
         raw = (ASSETS / Path(src).name).read_bytes()
+        label = Path(src).name
+    if src.startswith("data:"):
+        label = "pasted image"
+    crop_image(raw)  # validate now (readable error)
+    return raw, label
+
+
+def crop_image(raw: bytes) -> bytes:
+    """Raw image bytes -> PNG centre-cropped to the current server aspect and resized to its size (in memory)."""
+    from PIL import Image
+
     try:
         img = Image.open(io.BytesIO(raw)).convert("RGB")
     except Exception:
@@ -294,10 +311,20 @@ def server_args(s: dict) -> str:
     return " ".join(args)
 
 
-async def session(ws, pending_image):
+async def session(ws):
+    try:  # the server sends its config first: crop the start image to its (possibly new) size
+        j = json.loads(await asyncio.wait_for(ws.recv(), 10))
+        if j.get("type") == "config":
+            if (j["width"], j["height"]) != size():
+                Q.clear()
+            CFG.update(j)
+            ST["status"] = "streaming"
+            log(f"server: {j['args']}")
+    except (asyncio.TimeoutError, ValueError, TypeError):
+        pass
     start = {"type": "start", "prompt": ST["prompt"], "mode": ST["mode"], "strength": ST["strength"], "person": ST["person"]}
-    if pending_image:
-        start["image"] = base64.b64encode(pending_image).decode()
+    if START["raw"] is not None:  # re-apply the start image after a server restart (from RAM)
+        start["image"] = base64.b64encode(crop_image(START["raw"])).decode()
     await ws.send(json.dumps(start))
     ST["version"] += 1
     SENT_T[ST["version"]] = time.time()
@@ -388,9 +415,6 @@ async def session(ws, pending_image):
 async def session_loop():
     import websockets
 
-    pending = {"image": None}
-    if a.prompt:
-        pass
     while not STOP.is_set():
         try:
             ws = await websockets.connect(a.url, max_size=2 ** 25, ping_interval=20, open_timeout=5)
@@ -400,7 +424,7 @@ async def session_loop():
             await asyncio.sleep(2)
             continue
         try:
-            await session(ws, pending["image"])
+            await session(ws)
         except Exception as exc:  # noqa: BLE001
             log(f"session ended: {exc!r}")
         finally:
@@ -454,7 +478,8 @@ button.warn{background:#3a2c14;border-color:var(--warn);color:var(--warn)}
   <div class="row"><label>Strength</label><input type="range" id="strength" min="0.5" max="1" step="0.01"><span id="strv"></span></div>
   <div class="muted">Webcam strength: 0.85 keeps your room (faster), 0.95+ new scene (slower). Person keep: try 0.98.</div>
   <div class="row"><label>Start image</label><select id="img"></select><button id="imggo">Start from it</button></div>
-  <div class="row"><input id="imgurl" placeholder="or paste an image link + Enter (memory only, never saved)" style="flex:1"></div></div>
+  <div class="row"><input id="imgurl" placeholder="or paste an image link (Google Images ok) + Enter: memory only, never saved" style="flex:1"></div>
+  <div class="row"><span class="muted" id="startimg"></span><button id="imgclear">Clear</button></div></div>
  <div class="card"><h2>Server settings</h2><div class="grid2">
   <label>Resolution</label><select id="res"><option value="1280x704">1280×704 (native, 720p)</option><option value="1024x576">1024×576 (fast)</option><option value="960x544">960×544</option><option value="832x480">832×480</option></select>
   <label>Orientation</label><select id="ori"><option value="land">Landscape</option><option value="port">Portrait</option></select>
@@ -499,6 +524,7 @@ function stat(){ if(!S) return; const c=S.cfg, pf=S.local.fps==='auto'?(c.fps||2
   $('ahead').value=ar?ar[1]:'-1'; $('overlap').value=c2.overlap||0; $('jpeg').value=jq?jq[1]:'90'; $('recache_frames').value=rc?rc[1]:'16'; $('rope').value=c2.rope||'absolute';
   $('upscale').value=S.local.upscale; $('sharp').value=S.local.sharp; $('fps').value=S.local.fps; $('buffer').value=S.local.buffer;
   $('img').innerHTML=S.assets.map(f=>`<option>${f}</option>`).join(''); }
+ $('startimg').textContent=S.start_image?('Start image: '+S.start_image+' (kept in memory, re-applied after restarts)'):'No start image (text start)'; $('imgclear').style.display=S.start_image?'':'none';
  $('strv').textContent=(+$('strength').value).toFixed(2); $('shv').textContent=(+$('sharp').value).toFixed(2); }
 let down=false;
 function reattach(){ const t=Date.now(); $('out').src='/stream/out?'+t; if(S&&S.mode==='v2v') $('in').src='/stream/in?'+t; }
@@ -514,6 +540,7 @@ $('prompt').onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault();
 $('mode').onchange=()=>post('/cmd',{set:{mode:$('mode').value}});
 $('person').onchange=()=>post('/cmd',{set:{person:$('person').checked}});
 $('strength').onchange=()=>post('/cmd',{set:{strength:+$('strength').value}}); $('strength').oninput=stat;
+$('imgclear').onclick=()=>post('/cmd',{clear_image:true});
 $('imggo').onclick=()=>post('/cmd',{image:$('img').value}).then(r=>!r.ok&&alert(r.error));
 $('imgurl').onkeydown=e=>{ if(e.key==='Enter'&&$('imgurl').value.trim()) post('/cmd',{image:$('imgurl').value.trim()}).then(r=>{ if(r.ok) $('imgurl').value=''; else alert('Image not used: '+r.error); }); };
 $('restart').onclick=()=>{ const [w,h]=$('res').value.split('x').map(Number), port=$('ori').value==='port';
@@ -546,7 +573,7 @@ class Web(BaseHTTPRequestHandler):
             self.wfile.write(b)
         elif self.path == "/state":
             assets = sorted(f.name for f in ASSETS.glob("*") if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"))
-            self._json({**ST, "cfg": CFG, "local": LOCAL, "buffer": len(Q), "assets": assets})
+            self._json({**ST, "cfg": CFG, "local": LOCAL, "buffer": len(Q), "assets": assets, "start_image": START["label"]})
         elif self.path.startswith("/stream/"):
             key = self.path.split("/")[2].split("?")[0]
             self.send_response(200)
@@ -579,9 +606,14 @@ class Web(BaseHTTPRequestHandler):
         if self.path == "/cmd":
             if "image" in body:
                 try:
-                    body = {"image": load_image(str(body["image"]))}
+                    raw, label = fetch_image(str(body["image"]))
                 except Exception as exc:  # noqa: BLE001
                     return self._json({"ok": False, "error": str(exc)}, 400)
+                START.update(raw=raw, label=label)
+                body = {"image": crop_image(raw)}
+            if "clear_image" in body:  # forget it (memory only): later restarts start from text again
+                START.update(raw=None, label="")
+                return self._json({"ok": True})
             LOOP.call_soon_threadsafe(CMDS.put_nowait, body)
             self._json({"ok": True})
         elif self.path == "/server":

@@ -88,8 +88,10 @@ class State:
         self.lock = threading.Lock()
         self.prompt, self.cut, self.version = a.prompt, False, 0
         self.mode, self.strength, self.person = "t2v", 0.7, False
+        self.spread = False  # v2v slower than real time: True = sample the chunk's input evenly over all frames since
+        # the last chunk (continuous, slightly fast-forwarded motion); False = the latest frames (jumps to catch up)
         self.reset_req = ("text", None)  # (kind, image)
-        self.inputs = deque(maxlen=4 * FPC)  # latest webcam frames (RGB)
+        self.inputs = deque(maxlen=8 * FPC)  # latest webcam frames (RGB); spread mode samples across them
         self.mask = None  # latest person mask (uint8 HxW)
         self.out = None  # asyncio queue (set by the connection)
         self.loop = None
@@ -149,7 +151,11 @@ def gen_loop():
             new = [x for x in inputs if x[0] > S.last_fid]  # frames not used yet (keeps the encoder continuous)
             old = [x for x in inputs if x[0] <= S.last_fid]
             need = eng.frames_needed()
-            sel = (old + new)[-need:] if len(new) < need else new[-need:]
+            if S.spread and len(new) > need:
+                idx = np.linspace(0, len(new) - 1, need).round().astype(int)
+                sel = [new[i] for i in idx]
+            else:
+                sel = (old + new)[-need:] if len(new) < need else new[-need:]
             sel = [sel[0]] * (need - len(sel)) + sel
             S.last_fid = sel[-1][0]
             in_ids = [i for i, _ in sel]
@@ -266,6 +272,7 @@ async def handler(ws):
                     S.consumed = int(j["n"])
                     continue
                 elif t == "set":
+                    S.spread = bool(j.get("spread", S.spread))
                     S.mode = j.get("mode", S.mode)
                     S.strength = float(j.get("strength", S.strength))
                     S.person = bool(j.get("person", S.person))

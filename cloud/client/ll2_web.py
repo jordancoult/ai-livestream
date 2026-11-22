@@ -50,7 +50,7 @@ if a.ssh and a.url == "ws://127.0.0.1:8765":  # connect through our own tunnel's
 ASSETS = Path(__file__).resolve().parents[2] / "assets"
 LOCK = threading.Lock()
 CFG = {"height": 704, "width": 1280}  # server config (from its "config" message)
-ST = {"prompt": a.prompt, "mode": a.mode, "strength": a.strength, "person": a.person, "status": "starting",
+ST = {"prompt": a.prompt, "mode": a.mode, "strength": a.strength, "person": a.person, "spread": False, "status": "starting",
       "gen_fps": None, "gen_ms": None, "ahead": None, "change_latency": None, "message": "", "version": 0,
       "played": 0, "repeated": 0, "snapped": 0}
 LOCAL = {"upscale": 0, "sharp": 0.0, "fps": "auto", "buffer": 4}
@@ -351,6 +351,7 @@ async def session(ws):
     except (asyncio.TimeoutError, ValueError, TypeError):
         pass
     start = {"type": "start", "prompt": ST["prompt"], "mode": ST["mode"], "strength": ST["strength"], "person": ST["person"]}
+    await ws.send(json.dumps({"type": "set", "spread": ST["spread"]}))
     if START["raw"] is not None:  # re-apply the start image after a server restart (from RAM)
         start["image"] = base64.b64encode(crop_image(START["raw"])).decode()
     await ws.send(json.dumps(start))
@@ -415,10 +416,10 @@ async def session(ws):
                 ST["prompt"] = c["prompt"]
                 msg = {"type": "prompt", "text": c["prompt"], "cut": bool(c.get("cut"))}
             elif "set" in c:
-                for k in ("mode", "strength", "person"):
+                for k in ("mode", "strength", "person", "spread"):
                     if k in c["set"]:
                         ST[k] = c["set"][k]
-                msg = {"type": "set", **{k: ST[k] for k in ("mode", "strength", "person")}}
+                msg = {"type": "set", **{k: ST[k] for k in ("mode", "strength", "person", "spread")}}
             elif "reset" in c:
                 msg = {"type": "reset", "prompt": ST["prompt"]}
             elif "image" in c:
@@ -502,7 +503,8 @@ button.warn{background:#3a2c14;border-color:var(--warn);color:var(--warn)}
   <div class="muted">Enter = smooth change. A hard cut clears the scene memory.</div></div>
  <div class="card"><h2>Input</h2>
   <div class="row"><label>Mode</label><select id="mode"><option value="t2v">Text only</option><option value="v2v">Webcam (video to video)</option></select>
-   <label><input type="checkbox" id="person"> Keep me (person)</label></div>
+   <label><input type="checkbox" id="person"> Keep me (person)</label>
+   <label title="When generation is slower than real time, each chunk normally takes your latest frames, so the output jumps forward to catch up. Smooth spreads the chunk's frames over everything since the last chunk: continuous but slightly fast-forwarded motion."><input type="checkbox" id="spread"> Smooth motion when slow</label></div>
   <div class="row"><label>Strength</label><input type="range" id="strength" min="0.5" max="1" step="0.01"><span id="strv"></span></div>
   <div class="muted">Webcam strength: 0.85 keeps your room (faster), 0.95+ new scene (slower). Person keep: try 0.98.</div>
   <div class="row"><label>Start image</label><select id="img"></select><button id="imggo">Start from it</button></div>
@@ -546,7 +548,7 @@ function stat(){ if(!S) return; const c=S.cfg, pf=S.local.fps==='auto'?(c.fps||2
  <b>Generation</b><span class="${gcls}">${g??'–'} fps</span><b>Playout</b><span>${pf} fps · buffer ${S.buffer} · repeated ${S.repeated}</span>
  <b>Last change</b><span>${S.change_latency??'–'} s</span><b>Last</b><span class="muted">${S.message||''}</span>`;
  $('incard').style.display=S.mode==='v2v'?'':'none'; if(S.mode==='v2v' && !$('in').src.includes('/stream/in')) $('in').src='/stream/in?'+Date.now();
- if(!formInit){ formInit=true; const c2=S.cfg; $('prompt').value=S.prompt; $('mode').value=S.mode; $('person').checked=S.person; $('strength').value=S.strength;
+ if(!formInit){ formInit=true; const c2=S.cfg; $('prompt').value=S.prompt; $('mode').value=S.mode; $('person').checked=S.person; $('spread').checked=!!S.spread; $('strength').value=S.strength;
   const port=c2.height>c2.width, w=port?c2.height:c2.width, h=port?c2.width:c2.height; $('res').value=`${w}x${h}`; $('ori').value=port?'port':'land';
   $('ckpt').value=c2.ckpt||'S2'; $('steps').value=c2.steps||''; $('sage').value=c2.sage?'1':'0'; $('kvq').value=c2.kvq===false?'0':'1';
   $('clean_every').value=c2.clean_every||1; $('window').value=c2.window||32;
@@ -568,6 +570,7 @@ $('cut').onclick=()=>post('/cmd',{prompt:$('prompt').value,cut:true});
 $('reset').onclick=()=>post('/cmd',{reset:true});
 $('prompt').onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); $('smooth').click(); } };
 $('mode').onchange=()=>post('/cmd',{set:{mode:$('mode').value}});
+$('spread').onchange=()=>post('/cmd',{set:{spread:$('spread').checked}});
 $('person').onchange=()=>post('/cmd',{set:{person:$('person').checked}});
 $('strength').onchange=()=>post('/cmd',{set:{strength:+$('strength').value}}); $('strength').oninput=stat;
 function sendImageFile(f){ if(!f||!f.type.startsWith('image/')) return; if(f.size>25e6){ alert('Image larger than 25 MB'); return; }

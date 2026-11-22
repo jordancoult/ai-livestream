@@ -51,7 +51,7 @@ CFG = {"height": 704, "width": 1280}  # server config (from its "config" message
 ST = {"prompt": a.prompt, "mode": a.mode, "strength": a.strength, "person": a.person, "status": "starting",
       "gen_fps": None, "gen_ms": None, "ahead": None, "change_latency": None, "message": "", "version": 0,
       "played": 0, "repeated": 0, "snapped": 0}
-LOCAL = {"upscale": 0, "sharp": 0.0, "fps": "match", "buffer": 4}
+LOCAL = {"upscale": 0, "sharp": 0.0, "fps": "auto", "buffer": 4}
 Q = deque()  # (frame bgr, version)
 VIEWS = {"out": None, "in": None}  # latest frames for the page
 VIEW_COND = threading.Condition()
@@ -474,7 +474,7 @@ button.warn{background:#3a2c14;border-color:var(--warn);color:var(--warn)}
  <div class="card"><h2>Local (instant)</h2><div class="grid2">
   <label>Upscale</label><select id="upscale"><option value="0">off (native)</option><option value="1080">1080p (Lanczos)</option><option value="1440">1440p (Lanczos)</option></select>
   <label>Sharpen</label><div class="row" style="margin:0"><input type="range" id="sharp" min="0" max="1.5" step="0.05"><span id="shv"></span></div>
-  <label>Playout fps</label><select id="fps"><option value="match">match generation (default: smooth, no stalls)</option><option value="auto">server (24)</option><option>25</option><option>24</option><option>20</option><option>18</option><option>15</option></select>
+  <label>Playout fps</label><select id="fps"><option value="auto">server (24)</option><option value="match">match generation (smooth, no stalls)</option><option>25</option><option>24</option><option>20</option><option>18</option><option>15</option></select>
   <label>Buffer</label><select id="buffer"><option>4</option><option>8</option><option>16</option><option>32</option></select>
  </div><div class="muted">If generation fps is below playout fps, playback stutters once per chunk: lower the playout fps or speed up the server.</div></div>
 </section></main>

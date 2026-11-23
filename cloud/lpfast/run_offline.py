@@ -105,6 +105,11 @@ def main():
     p.add_argument("--preset", default=None, help="presets.json name (gains, limits, gates, smoothing), as the live bridge")
     p.add_argument("--set", default="", help='JSON overrides on top, e.g. \'{"euro": {"lower": [0.5, 3]}, "gates": '
                    '{"score": [0.5, 0.35]}, "gains": {"lip": 2.0}}\'')
+    p.add_argument("--audio", default=None, help="drive the expressions from this speech file (Ditto, audio_driver.py) "
+                   "instead of the webcam input; output frame k uses the audio at its input frame's capture time")
+    p.add_argument("--audio-src", default=None, help="face image that conditions Ditto's motion (a human face; default "
+                   "the first input frame)")
+    p.add_argument("--in-fps", type=float, default=26, help="input send rate (maps input frames to audio time)")
     a = p.parse_args()
     from lp_pass import LPPass
     dst = Path(a.dst)
@@ -140,10 +145,28 @@ def main():
     w_lp, w_rv = Writer(dst / "lp.mp4", W, H, a.fps), Writer(dst / "review.mp4", 3 * W, H, a.fps)
     times, oks, gstats = [], 0, []
     pick = lambda s: ins[min(len(ins) - 1, max(0, s - 1))]  # noqa: E731  output k was made from input seq[k]-1
+    if a.audio:  # audio-driven: per-frame motion from the speech, looked up at each frame's capture time
+        from audio_driver import AudioMotion
+        am = AudioMotion()
+        src_img = a.audio_src
+        if src_img is None:
+            src_img = str(dst / "audio_src.png")
+            cv2.imwrite(src_img, ins[0])
+        amf = am.from_wav(a.audio, src_img)
+        print(f"audio motion: {len(amf)} frames")
+
+        class _AudioDrv:
+            face = drv.face  # (detection counters in the summary)
+
+            @staticmethod
+            def analyze(frame_or_seq):
+                return am.as_driver(amf[min(len(amf) - 1, int(round((frame_or_seq - 1) / a.in_fps * 25)))])
+        drv = _AudioDrv()
+        pick = lambda s: s  # noqa: E731  the "input" is the capture index -> audio time
     fut = pool.submit(drv.analyze, pick(seq[0]))
     t_start = time.perf_counter()
     for k, (o, s) in enumerate(zip(outs, seq)):
-        i = pick(s)
+        i = ins[min(len(ins) - 1, max(0, s - 1))]
         d = fut.result()
         if k + 1 < len(seq):
             fut = pool.submit(drv.analyze, pick(seq[k + 1]))

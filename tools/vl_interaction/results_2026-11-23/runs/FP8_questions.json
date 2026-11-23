@@ -1,0 +1,497 @@
+{
+ "session": "test-2553e167",
+ "video": "/workspace/cam30t.mp4",
+ "prompt": "",
+ "queries": {
+  "8": "Hey, can you see me? What am I wearing?",
+  "21": "What am I pointing at?",
+  "31": "What am I doing with my hand right now?",
+  "45": "Do I look happy or surprised?"
+ },
+ "frames": 60,
+ "spoke": 3,
+ "latency_median_s": 0.193,
+ "latency_max_s": 0.47,
+ "log": [
+  {
+   "t": 0.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.47,
+   "raw": "</silence>"
+  },
+  {
+   "t": 1.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.113,
+   "raw": "</silence>"
+  },
+  {
+   "t": 2.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.139,
+   "raw": "</silence>"
+  },
+  {
+   "t": 3.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.142,
+   "raw": "</silence>"
+  },
+  {
+   "t": 4.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.146,
+   "raw": "</silence>"
+  },
+  {
+   "t": 5.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.204,
+   "raw": "</silence>"
+  },
+  {
+   "t": 6.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.14,
+   "raw": "</silence>"
+  },
+  {
+   "t": 7.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.152,
+   "raw": "</silence>"
+  },
+  {
+   "t": 8.0,
+   "query": "Hey, can you see me? What am I wearing?",
+   "kind": "speak",
+   "said": "Yeah, I can see you! You're wearing a white tank top.",
+   "latency_s": 0.265,
+   "raw": "</response> Yeah, I can see you! You're wearing a white tank top."
+  },
+  {
+   "t": 9.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.157,
+   "raw": "</silence>"
+  },
+  {
+   "t": 10.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.161,
+   "raw": "</silence>"
+  },
+  {
+   "t": 11.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.088,
+   "raw": "</silence>"
+  },
+  {
+   "t": 12.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.167,
+   "raw": "</silence>"
+  },
+  {
+   "t": 13.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.169,
+   "raw": "</silence>"
+  },
+  {
+   "t": 14.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.171,
+   "raw": "</silence>"
+  },
+  {
+   "t": 15.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.174,
+   "raw": "</silence>"
+  },
+  {
+   "t": 16.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.107,
+   "raw": "</silence>"
+  },
+  {
+   "t": 17.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.165,
+   "raw": "</silence>"
+  },
+  {
+   "t": 18.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.179,
+   "raw": "</silence>"
+  },
+  {
+   "t": 19.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.181,
+   "raw": "</silence>"
+  },
+  {
+   "t": 20.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.185,
+   "raw": "</silence>"
+  },
+  {
+   "t": 21.0,
+   "query": "What am I pointing at?",
+   "kind": "speak",
+   "said": "You're pointing at your chest area.",
+   "latency_s": 0.218,
+   "raw": "</response> You're pointing at your chest area."
+  },
+  {
+   "t": 22.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.167,
+   "raw": "</silence>"
+  },
+  {
+   "t": 23.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.175,
+   "raw": "</silence>"
+  },
+  {
+   "t": 24.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.193,
+   "raw": "</silence>"
+  },
+  {
+   "t": 25.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.201,
+   "raw": "</silence>"
+  },
+  {
+   "t": 26.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.166,
+   "raw": "</silence>"
+  },
+  {
+   "t": 27.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.194,
+   "raw": "</silence>"
+  },
+  {
+   "t": 28.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.206,
+   "raw": "</silence>"
+  },
+  {
+   "t": 29.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.205,
+   "raw": "</silence>"
+  },
+  {
+   "t": 30.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.206,
+   "raw": "</silence>"
+  },
+  {
+   "t": 31.0,
+   "query": "What am I doing with my hand right now?",
+   "kind": "speak",
+   "said": "You're touching your chin and neck area with your hand.",
+   "latency_s": 0.272,
+   "raw": "</response> You're touching your chin and neck area with your hand."
+  },
+  {
+   "t": 32.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.194,
+   "raw": "</silence>"
+  },
+  {
+   "t": 33.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.213,
+   "raw": "</silence>"
+  },
+  {
+   "t": 34.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.214,
+   "raw": "</silence>"
+  },
+  {
+   "t": 35.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.216,
+   "raw": "</silence>"
+  },
+  {
+   "t": 36.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.167,
+   "raw": "</silence>"
+  },
+  {
+   "t": 37.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.209,
+   "raw": "</silence>"
+  },
+  {
+   "t": 38.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.211,
+   "raw": "</silence>"
+  },
+  {
+   "t": 39.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.212,
+   "raw": "</silence>"
+  },
+  {
+   "t": 40.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.216,
+   "raw": "</silence>"
+  },
+  {
+   "t": 41.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.194,
+   "raw": "</silence>"
+  },
+  {
+   "t": 42.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.226,
+   "raw": "</silence>"
+  },
+  {
+   "t": 43.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.227,
+   "raw": "</silence>"
+  },
+  {
+   "t": 44.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 45.0,
+   "query": "Do I look happy or surprised?",
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 46.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 47.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 48.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 49.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 50.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 51.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 52.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 53.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 54.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 55.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 56.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 57.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 58.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  },
+  {
+   "t": 59.0,
+   "query": null,
+   "kind": "other",
+   "said": "",
+   "latency_s": null,
+   "raw": "ERROR HTTPError: HTTP Error 502: Bad Gateway"
+  }
+ ]
+}

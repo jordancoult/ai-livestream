@@ -1,0 +1,492 @@
+{
+ "session": "test-aa0b28f4",
+ "video": "cam30t.mp4",
+ "prompt": "You are G-Star, a playful cartoon co-host on this livestream. Whenever the streamer does something expressive (a gesture, a funny face, a surprised look), react with one short, funny line. Otherwise stay silent.",
+ "queries": {},
+ "frames": 60,
+ "spoke": 5,
+ "latency_median_s": 0.216,
+ "latency_max_s": 0.441,
+ "log": [
+  {
+   "t": 0.0,
+   "query": null,
+   "kind": "speak",
+   "said": "Whoa, did the cat just steal your soul?",
+   "latency_s": 0.127,
+   "raw": "</response> Whoa, did the cat just steal your soul?"
+  },
+  {
+   "t": 1.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.119,
+   "raw": "</silence>"
+  },
+  {
+   "t": 2.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.109,
+   "raw": "</silence>"
+  },
+  {
+   "t": 3.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.113,
+   "raw": "</silence>"
+  },
+  {
+   "t": 4.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.126,
+   "raw": "</silence>"
+  },
+  {
+   "t": 5.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.133,
+   "raw": "</silence>"
+  },
+  {
+   "t": 6.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.127,
+   "raw": "</silence>"
+  },
+  {
+   "t": 7.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.111,
+   "raw": "</silence>"
+  },
+  {
+   "t": 8.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.151,
+   "raw": "</silence>"
+  },
+  {
+   "t": 9.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.149,
+   "raw": "</silence>"
+  },
+  {
+   "t": 10.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.151,
+   "raw": "</silence>"
+  },
+  {
+   "t": 11.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.157,
+   "raw": "</silence>"
+  },
+  {
+   "t": 12.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.139,
+   "raw": "</silence>"
+  },
+  {
+   "t": 13.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.165,
+   "raw": "</silence>"
+  },
+  {
+   "t": 14.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.166,
+   "raw": "</silence>"
+  },
+  {
+   "t": 15.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.167,
+   "raw": "</silence>"
+  },
+  {
+   "t": 16.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.174,
+   "raw": "</silence>"
+  },
+  {
+   "t": 17.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.136,
+   "raw": "</silence>"
+  },
+  {
+   "t": 18.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.168,
+   "raw": "</silence>"
+  },
+  {
+   "t": 19.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.174,
+   "raw": "</silence>"
+  },
+  {
+   "t": 20.0,
+   "query": null,
+   "kind": "speak",
+   "said": "Did you just point at your own chest and whisper 'I'm not what I seem'? Haha, that's some dark humor right there!",
+   "latency_s": 0.335,
+   "raw": "</response> Did you just point at your own chest and whisper 'I'm not what I seem'? Haha, that's some dark humor right there!"
+  },
+  {
+   "t": 21.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.176,
+   "raw": "</silence>"
+  },
+  {
+   "t": 22.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.144,
+   "raw": "</silence>"
+  },
+  {
+   "t": 23.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.201,
+   "raw": "</silence>"
+  },
+  {
+   "t": 24.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.201,
+   "raw": "</silence>"
+  },
+  {
+   "t": 25.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.207,
+   "raw": "</silence>"
+  },
+  {
+   "t": 26.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.206,
+   "raw": "</silence>"
+  },
+  {
+   "t": 27.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.167,
+   "raw": "</silence>"
+  },
+  {
+   "t": 28.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.218,
+   "raw": "</silence>"
+  },
+  {
+   "t": 29.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.219,
+   "raw": "</silence>"
+  },
+  {
+   "t": 30.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.221,
+   "raw": "</silence>"
+  },
+  {
+   "t": 31.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.226,
+   "raw": "</silence>"
+  },
+  {
+   "t": 32.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.122,
+   "raw": "</silence>"
+  },
+  {
+   "t": 33.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.216,
+   "raw": "</silence>"
+  },
+  {
+   "t": 34.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.227,
+   "raw": "</silence>"
+  },
+  {
+   "t": 35.0,
+   "query": null,
+   "kind": "speak",
+   "said": "Ooh, mouth wide open like he just spotted the ghost of his own past!",
+   "latency_s": 0.277,
+   "raw": "</response> Ooh, mouth wide open like he just spotted the ghost of his own past!"
+  },
+  {
+   "t": 36.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.228,
+   "raw": "</silence>"
+  },
+  {
+   "t": 37.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.211,
+   "raw": "</silence>"
+  },
+  {
+   "t": 38.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.249,
+   "raw": "</silence>"
+  },
+  {
+   "t": 39.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.248,
+   "raw": "</silence>"
+  },
+  {
+   "t": 40.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.247,
+   "raw": "</silence>"
+  },
+  {
+   "t": 41.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.235,
+   "raw": "</silence>"
+  },
+  {
+   "t": 42.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.231,
+   "raw": "</silence>"
+  },
+  {
+   "t": 43.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.272,
+   "raw": "</silence>"
+  },
+  {
+   "t": 44.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.278,
+   "raw": "</silence>"
+  },
+  {
+   "t": 45.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.273,
+   "raw": "</silence>"
+  },
+  {
+   "t": 46.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.274,
+   "raw": "</silence>"
+  },
+  {
+   "t": 47.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.256,
+   "raw": "</silence>"
+  },
+  {
+   "t": 48.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.231,
+   "raw": "</silence>"
+  },
+  {
+   "t": 49.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.301,
+   "raw": "</silence>"
+  },
+  {
+   "t": 50.0,
+   "query": null,
+   "kind": "speak",
+   "said": "Tongue out and pointing? That's a whole new level of 'I'm not sure about this' energy!",
+   "latency_s": 0.441,
+   "raw": "</response> Tongue out and pointing? That's a whole new level of 'I'm not sure about this' energy!"
+  },
+  {
+   "t": 51.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.25,
+   "raw": "</silence>"
+  },
+  {
+   "t": 52.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.242,
+   "raw": "</silence>"
+  },
+  {
+   "t": 53.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.255,
+   "raw": "</silence>"
+  },
+  {
+   "t": 54.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.316,
+   "raw": "</silence>"
+  },
+  {
+   "t": 55.0,
+   "query": null,
+   "kind": "speak",
+   "said": "Mouth bigger than his surprise\u2014talk about dramatic flair!",
+   "latency_s": 0.326,
+   "raw": "</response> Mouth bigger than his surprise\u2014talk about dramatic flair!"
+  },
+  {
+   "t": 56.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.328,
+   "raw": "</silence>"
+  },
+  {
+   "t": 57.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.203,
+   "raw": "</silence>"
+  },
+  {
+   "t": 58.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.317,
+   "raw": "</silence>"
+  },
+  {
+   "t": 59.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.281,
+   "raw": "</silence>"
+  }
+ ]
+}

@@ -1,0 +1,513 @@
+{
+ "session": "test-4b84f290",
+ "video": "cam30t.mp4",
+ "prompt": "",
+ "queries": {
+  "8": "Hey, can you see me? What am I wearing?",
+  "21": "What am I pointing at?",
+  "31": "What am I doing with my hand right now?",
+  "45": "Do I look happy or surprised?"
+ },
+ "frames": 60,
+ "spoke": 4,
+ "latency_median_s": 0.171,
+ "latency_max_s": 0.275,
+ "log": [
+  {
+   "t": 0.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.065,
+   "raw": "</silence>"
+  },
+  {
+   "t": 1.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.097,
+   "raw": "</silence>"
+  },
+  {
+   "t": 2.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.091,
+   "raw": "</silence>"
+  },
+  {
+   "t": 3.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.113,
+   "raw": "</silence>"
+  },
+  {
+   "t": 4.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.107,
+   "raw": "</silence>"
+  },
+  {
+   "t": 5.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.12,
+   "raw": "</silence>"
+  },
+  {
+   "t": 6.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.117,
+   "raw": "</silence>"
+  },
+  {
+   "t": 7.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.048,
+   "raw": "</silence>"
+  },
+  {
+   "t": 8.0,
+   "query": "Hey, can you see me? What am I wearing?",
+   "kind": "speak",
+   "said": "Yeah, I can see you clearly! You're wearing a white tank top and have short brown hair with a beard.",
+   "latency_s": 0.255,
+   "raw": "</response> Yeah, I can see you clearly! You're wearing a white tank top and have short brown hair with a beard.",
+   "tts_first_audio_s": 0.108,
+   "tts_total_s": 1.557,
+   "wav": "runs/r2_questions_tts_reply008.wav",
+   "audio_s": 8.08
+  },
+  {
+   "t": 9.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.14,
+   "raw": "</silence>"
+  },
+  {
+   "t": 10.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.143,
+   "raw": "</silence>"
+  },
+  {
+   "t": 11.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.147,
+   "raw": "</silence>"
+  },
+  {
+   "t": 12.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.143,
+   "raw": "</silence>"
+  },
+  {
+   "t": 13.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.152,
+   "raw": "</silence>"
+  },
+  {
+   "t": 14.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.155,
+   "raw": "</silence>"
+  },
+  {
+   "t": 15.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.156,
+   "raw": "</silence>"
+  },
+  {
+   "t": 16.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.158,
+   "raw": "</silence>"
+  },
+  {
+   "t": 17.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.158,
+   "raw": "</silence>"
+  },
+  {
+   "t": 18.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.15,
+   "raw": "</silence>"
+  },
+  {
+   "t": 19.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.152,
+   "raw": "</silence>"
+  },
+  {
+   "t": 20.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.133,
+   "raw": "</silence>"
+  },
+  {
+   "t": 21.0,
+   "query": "What am I pointing at?",
+   "kind": "speak",
+   "said": "You're pointing at your chest area.",
+   "latency_s": 0.192,
+   "raw": "</response> You're pointing at your chest area.",
+   "tts_first_audio_s": 0.06,
+   "tts_total_s": 0.363,
+   "wav": "runs/r2_questions_tts_reply021.wav",
+   "audio_s": 1.68
+  },
+  {
+   "t": 22.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.138,
+   "raw": "</silence>"
+  },
+  {
+   "t": 23.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.151,
+   "raw": "</silence>"
+  },
+  {
+   "t": 24.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.148,
+   "raw": "</silence>"
+  },
+  {
+   "t": 25.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.173,
+   "raw": "</silence>"
+  },
+  {
+   "t": 26.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.171,
+   "raw": "</silence>"
+  },
+  {
+   "t": 27.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.164,
+   "raw": "</silence>"
+  },
+  {
+   "t": 28.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.18,
+   "raw": "</silence>"
+  },
+  {
+   "t": 29.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.183,
+   "raw": "</silence>"
+  },
+  {
+   "t": 30.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.169,
+   "raw": "</silence>"
+  },
+  {
+   "t": 31.0,
+   "query": "What am I doing with my hand right now?",
+   "kind": "speak",
+   "said": "You're touching your chin and neck area while looking upward.",
+   "latency_s": 0.252,
+   "raw": "</response> You're touching your chin and neck area while looking upward.",
+   "tts_first_audio_s": 0.082,
+   "tts_total_s": 0.7,
+   "wav": "runs/r2_questions_tts_reply031.wav",
+   "audio_s": 3.76
+  },
+  {
+   "t": 32.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.166,
+   "raw": "</silence>"
+  },
+  {
+   "t": 33.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.156,
+   "raw": "</silence>"
+  },
+  {
+   "t": 34.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.19,
+   "raw": "</silence>"
+  },
+  {
+   "t": 35.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.189,
+   "raw": "</silence>"
+  },
+  {
+   "t": 36.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.185,
+   "raw": "</silence>"
+  },
+  {
+   "t": 37.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.17,
+   "raw": "</silence>"
+  },
+  {
+   "t": 38.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.203,
+   "raw": "</silence>"
+  },
+  {
+   "t": 39.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.207,
+   "raw": "</silence>"
+  },
+  {
+   "t": 40.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.205,
+   "raw": "</silence>"
+  },
+  {
+   "t": 41.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.213,
+   "raw": "</silence>"
+  },
+  {
+   "t": 42.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.2,
+   "raw": "</silence>"
+  },
+  {
+   "t": 43.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.186,
+   "raw": "</silence>"
+  },
+  {
+   "t": 44.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.185,
+   "raw": "</silence>"
+  },
+  {
+   "t": 45.0,
+   "query": "Do I look happy or surprised?",
+   "kind": "speak",
+   "said": "You look surprised\u2014your eyes are wide open and your mouth is slightly agape.",
+   "latency_s": 0.275,
+   "raw": "</response> You look surprised\u2014your eyes are wide open and your mouth is slightly agape.",
+   "tts_first_audio_s": 0.062,
+   "tts_total_s": 0.706,
+   "wav": "runs/r2_questions_tts_reply045.wav",
+   "audio_s": 4.16
+  },
+  {
+   "t": 46.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.191,
+   "raw": "</silence>"
+  },
+  {
+   "t": 47.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.188,
+   "raw": "</silence>"
+  },
+  {
+   "t": 48.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.226,
+   "raw": "</silence>"
+  },
+  {
+   "t": 49.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.214,
+   "raw": "</silence>"
+  },
+  {
+   "t": 50.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.231,
+   "raw": "</silence>"
+  },
+  {
+   "t": 51.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.171,
+   "raw": "</silence>"
+  },
+  {
+   "t": 52.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.184,
+   "raw": "</silence>"
+  },
+  {
+   "t": 53.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.228,
+   "raw": "</silence>"
+  },
+  {
+   "t": 54.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.226,
+   "raw": "</silence>"
+  },
+  {
+   "t": 55.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.179,
+   "raw": "</silence>"
+  },
+  {
+   "t": 56.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.232,
+   "raw": "</silence>"
+  },
+  {
+   "t": 57.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.143,
+   "raw": "</silence>"
+  },
+  {
+   "t": 58.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.233,
+   "raw": "</silence>"
+  },
+  {
+   "t": 59.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.193,
+   "raw": "</silence>"
+  }
+ ]
+}

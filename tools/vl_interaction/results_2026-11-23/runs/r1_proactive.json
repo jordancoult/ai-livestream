@@ -1,0 +1,492 @@
+{
+ "session": "test-bd82f704",
+ "video": "cam30t.mp4",
+ "prompt": "",
+ "queries": {},
+ "frames": 60,
+ "spoke": 0,
+ "latency_median_s": 0.186,
+ "latency_max_s": 0.451,
+ "log": [
+  {
+   "t": 0.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.451,
+   "raw": "</silence>"
+  },
+  {
+   "t": 1.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.077,
+   "raw": "</silence>"
+  },
+  {
+   "t": 2.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.092,
+   "raw": "</silence>"
+  },
+  {
+   "t": 3.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.146,
+   "raw": "</silence>"
+  },
+  {
+   "t": 4.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.135,
+   "raw": "</silence>"
+  },
+  {
+   "t": 5.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.201,
+   "raw": "</silence>"
+  },
+  {
+   "t": 6.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.145,
+   "raw": "</silence>"
+  },
+  {
+   "t": 7.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.123,
+   "raw": "</silence>"
+  },
+  {
+   "t": 8.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.148,
+   "raw": "</silence>"
+  },
+  {
+   "t": 9.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.162,
+   "raw": "</silence>"
+  },
+  {
+   "t": 10.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.163,
+   "raw": "</silence>"
+  },
+  {
+   "t": 11.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.157,
+   "raw": "</silence>"
+  },
+  {
+   "t": 12.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.129,
+   "raw": "</silence>"
+  },
+  {
+   "t": 13.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.142,
+   "raw": "</silence>"
+  },
+  {
+   "t": 14.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.161,
+   "raw": "</silence>"
+  },
+  {
+   "t": 15.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.165,
+   "raw": "</silence>"
+  },
+  {
+   "t": 16.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.162,
+   "raw": "</silence>"
+  },
+  {
+   "t": 17.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.143,
+   "raw": "</silence>"
+  },
+  {
+   "t": 18.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.177,
+   "raw": "</silence>"
+  },
+  {
+   "t": 19.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.18,
+   "raw": "</silence>"
+  },
+  {
+   "t": 20.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.183,
+   "raw": "</silence>"
+  },
+  {
+   "t": 21.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.185,
+   "raw": "</silence>"
+  },
+  {
+   "t": 22.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.101,
+   "raw": "</silence>"
+  },
+  {
+   "t": 23.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.149,
+   "raw": "</silence>"
+  },
+  {
+   "t": 24.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.194,
+   "raw": "</silence>"
+  },
+  {
+   "t": 25.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.194,
+   "raw": "</silence>"
+  },
+  {
+   "t": 26.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.2,
+   "raw": "</silence>"
+  },
+  {
+   "t": 27.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.17,
+   "raw": "</silence>"
+  },
+  {
+   "t": 28.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.198,
+   "raw": "</silence>"
+  },
+  {
+   "t": 29.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.192,
+   "raw": "</silence>"
+  },
+  {
+   "t": 30.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.203,
+   "raw": "</silence>"
+  },
+  {
+   "t": 31.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.206,
+   "raw": "</silence>"
+  },
+  {
+   "t": 32.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.132,
+   "raw": "</silence>"
+  },
+  {
+   "t": 33.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.196,
+   "raw": "</silence>"
+  },
+  {
+   "t": 34.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.214,
+   "raw": "</silence>"
+  },
+  {
+   "t": 35.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.208,
+   "raw": "</silence>"
+  },
+  {
+   "t": 36.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.192,
+   "raw": "</silence>"
+  },
+  {
+   "t": 37.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.123,
+   "raw": "</silence>"
+  },
+  {
+   "t": 38.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.218,
+   "raw": "</silence>"
+  },
+  {
+   "t": 39.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.225,
+   "raw": "</silence>"
+  },
+  {
+   "t": 40.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.234,
+   "raw": "</silence>"
+  },
+  {
+   "t": 41.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.23,
+   "raw": "</silence>"
+  },
+  {
+   "t": 42.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.167,
+   "raw": "</silence>"
+  },
+  {
+   "t": 43.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.241,
+   "raw": "</silence>"
+  },
+  {
+   "t": 44.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.178,
+   "raw": "</silence>"
+  },
+  {
+   "t": 45.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.225,
+   "raw": "</silence>"
+  },
+  {
+   "t": 46.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.181,
+   "raw": "</silence>"
+  },
+  {
+   "t": 47.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.173,
+   "raw": "</silence>"
+  },
+  {
+   "t": 48.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.221,
+   "raw": "</silence>"
+  },
+  {
+   "t": 49.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.225,
+   "raw": "</silence>"
+  },
+  {
+   "t": 50.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.246,
+   "raw": "</silence>"
+  },
+  {
+   "t": 51.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.217,
+   "raw": "</silence>"
+  },
+  {
+   "t": 52.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.186,
+   "raw": "</silence>"
+  },
+  {
+   "t": 53.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.253,
+   "raw": "</silence>"
+  },
+  {
+   "t": 54.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.192,
+   "raw": "</silence>"
+  },
+  {
+   "t": 55.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.25,
+   "raw": "</silence>"
+  },
+  {
+   "t": 56.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.211,
+   "raw": "</silence>"
+  },
+  {
+   "t": 57.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.275,
+   "raw": "</silence>"
+  },
+  {
+   "t": 58.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.161,
+   "raw": "</silence>"
+  },
+  {
+   "t": 59.0,
+   "query": null,
+   "kind": "silence",
+   "said": "",
+   "latency_s": 0.272,
+   "raw": "</silence>"
+  }
+ ]
+}

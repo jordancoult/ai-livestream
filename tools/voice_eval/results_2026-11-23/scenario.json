@@ -1,0 +1,42 @@
+{
+ "sr": 24000,
+ "total": 44.0,
+ "turns": [
+  {
+   "kind": "ask",
+   "text": "Hey! Can you tell me a bit about how volcanoes form?",
+   "start": 0.5,
+   "end": 3.159
+  },
+  {
+   "kind": "interrupt",
+   "text": "Wait, wait, hold on. Sorry, I actually meant underwater volcanoes. How do those work?",
+   "start": 8.0,
+   "end": 13.393
+  },
+  {
+   "kind": "backchannel",
+   "text": "Mm-hmm.",
+   "start": 16.5,
+   "end": 16.99
+  },
+  {
+   "kind": "backchannel",
+   "text": "Yeah.",
+   "start": 18.5,
+   "end": 18.914
+  },
+  {
+   "kind": "backchannel",
+   "text": "Right.",
+   "start": 20.5,
+   "end": 20.974
+  },
+  {
+   "kind": "talkover",
+   "text": "Oh, that's so cool. So this weekend I'm going hiking near Mount Rainier with a couple of friends, and I'm hoping we get to see some old lava flows along the trail.",
+   "start": 24.0,
+   "end": 33.65
+  }
+ ]
+}

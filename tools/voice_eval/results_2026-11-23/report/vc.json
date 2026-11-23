@@ -1,0 +1,94 @@
+{
+ "name": "NVIDIA NemotronLabs VoiceChat-11B",
+ "model_segments": [
+  [
+   3.96,
+   4.9
+  ],
+  [
+   5.08,
+   8.74
+  ],
+  [
+   14.14,
+   17.22
+  ],
+  [
+   17.78,
+   18.6
+  ],
+  [
+   18.92,
+   21.32
+  ],
+  [
+   21.72,
+   24.82
+  ],
+  [
+   34.44,
+   36.08
+  ],
+  [
+   36.78,
+   39.46
+  ],
+  [
+   39.7,
+   43.58
+  ]
+ ],
+ "response_latency_s": 0.8,
+ "interrupt_yield_s": 0.74,
+ "interrupt_cutoff": "hard cut",
+ "interrupt_tail_drop_db": 146.8,
+ "interrupt_steepest_db_per_40ms": 120.5,
+ "reply_after_interrupt_s": 0.75,
+ "backchannel_kept_talking": "0/3",
+ "talkover_overlap_s": 0.82,
+ "reply_after_talkover_s": 0.79,
+ "model_talk_s": 22.2,
+ "rtf": 3.167,
+ "transcript": [
+  [
+   3.8,
+   8.8,
+   "Sure. Volcanoes form when hot magma rises to the surface."
+  ],
+  [
+   8.8,
+   17.7,
+   "Underwater volcanoes are pretty similar to the ones on..."
+  ],
+  [
+   17.7,
+   21.7,
+   "That's right. And sometimes these volcano-curate..."
+  ],
+  [
+   21.7,
+   24.7,
+   "You're welcome. I spewing lava that cools and hardens."
+  ],
+  [
+   24.7,
+   36.7,
+   "That sounds like a fun adventure."
+  ],
+  [
+   36.7,
+   39.7,
+   "Just make sure to stay safe and bring plenty of water."
+  ],
+  [
+   39.7,
+   43.7,
+   "Oh, and if you see any steam coming from the ground, don't get too close."
+  ],
+  [
+   43.7,
+   45.7,
+   "Thanks for watching!"
+  ]
+ ]
+}

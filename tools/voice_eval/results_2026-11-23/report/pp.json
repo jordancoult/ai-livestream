@@ -1,0 +1,74 @@
+{
+ "name": "NVIDIA PersonaPlex-7B",
+ "model_segments": [
+  [
+   0.26,
+   1.16
+  ],
+  [
+   3.52,
+   6.82
+  ],
+  [
+   6.84,
+   8.56
+  ],
+  [
+   12.5,
+   13.06
+  ],
+  [
+   13.68,
+   16.56
+  ],
+  [
+   16.68,
+   17.06
+  ],
+  [
+   33.98,
+   38.26
+  ],
+  [
+   38.46,
+   41.42
+  ],
+  [
+   41.62,
+   43.44
+  ]
+ ],
+ "response_latency_s": 0.36,
+ "interrupt_yield_s": 0.56,
+ "interrupt_cutoff": "hard cut",
+ "interrupt_tail_drop_db": 60.3,
+ "interrupt_steepest_db_per_40ms": 46.2,
+ "reply_after_interrupt_s": 0.29,
+ "backchannel_kept_talking": "0/1",
+ "talkover_overlap_s": 0.0,
+ "reply_after_talkover_s": 0.33,
+ "model_talk_s": 18.8,
+ "rtf": 0.259,
+ "transcript": [
+  [
+   0.0,
+   7.6,
+   "okay let me know okay basically volcanoes form when tectonic plates move right and when two"
+  ],
+  [
+   7.6,
+   35.1,
+   "plates pull up i got underwater volcanoes work the same way basically but sounds like a fun hike"
+  ],
+  [
+   35.1,
+   39.9,
+   "yeah the trail the amount rainier should give you some great views just bring water and good shoes"
+  ],
+  [
+   39.9,
+   43.1,
+   "and keep an eye on the weather you never know when a burst might happen"
+  ]
+ ]
+}

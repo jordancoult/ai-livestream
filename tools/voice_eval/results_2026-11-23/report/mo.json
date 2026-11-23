@@ -1,0 +1,110 @@
+{
+ "name": "Kyutai Moshi (moshiko)",
+ "model_segments": [
+  [
+   0.5,
+   1.26
+  ],
+  [
+   1.48,
+   2.58
+  ],
+  [
+   3.28,
+   4.14
+  ],
+  [
+   4.68,
+   9.64
+  ],
+  [
+   9.74,
+   10.0
+  ],
+  [
+   11.7,
+   14.3
+  ],
+  [
+   14.72,
+   15.26
+  ],
+  [
+   15.58,
+   18.24
+  ],
+  [
+   18.28,
+   20.7
+  ],
+  [
+   20.74,
+   22.4
+  ],
+  [
+   25.18,
+   28.96
+  ],
+  [
+   33.62,
+   35.42
+  ],
+  [
+   35.76,
+   38.32
+  ]
+ ],
+ "response_latency_s": -1.68,
+ "interrupt_yield_s": 1.64,
+ "interrupt_cutoff": "fade",
+ "interrupt_tail_drop_db": 34.5,
+ "interrupt_steepest_db_per_40ms": 19.8,
+ "reply_after_interrupt_s": 1.33,
+ "backchannel_kept_talking": "2/3",
+ "talkover_overlap_s": 3.8,
+ "reply_after_talkover_s": -0.03,
+ "model_talk_s": 26.0,
+ "rtf": 0.255,
+ "transcript": [
+  [
+   0.1,
+   4.0,
+   "Hey there, what's going on of course a"
+  ],
+  [
+   4.7,
+   9.7,
+   "Volcano is a hole in the earth's surface where molten rock ash and gases skate ah"
+  ],
+  [
+   11.9,
+   13.9,
+   "Yes underwater volcanoes"
+  ],
+  [
+   14.4,
+   15.2,
+   "well"
+  ],
+  [
+   15.2,
+   17.9,
+   "They're formed in the same way as land volcanoes"
+  ],
+  [
+   17.9,
+   22.3,
+   "but instead of erupting through the earth's surface a erupt through the ocean floor and"
+  ],
+  [
+   25.2,
+   28.9,
+   "Underwater volcanoes can be found in various locations around the world. Oh"
+  ],
+  [
+   28.9,
+   38.0,
+   "That sounds like a great time. I've always wanted to see those lava flows in person"
+  ]
+ ]
+}

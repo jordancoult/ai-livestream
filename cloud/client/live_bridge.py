@@ -51,6 +51,16 @@ p.add_argument("--input-rotate", default="none", choices=["none", "cw", "ccw", "
                help="rotate a network/phone input before cropping (AirPlay mirrors can arrive sideways)")
 p.add_argument("--input-fit", default="crop", choices=["crop", "pad"], help="network input whose shape differs from "
                "the session: crop = fill and cut the edges (default), pad = fit whole with black bars")
+p.add_argument("--audio-monitor", action="store_true", help="play your mic to the default output (HEADPHONES), delayed "
+               "by the live total latency (camera chain + bridge), so the preview window and your voice are in sync")
+p.add_argument("--monitor-source", default="default", help="--audio-monitor mic (PulseAudio source; pactl list short sources)")
+p.add_argument("--monitor-offset-ms", type=float, default=60, help="--audio-monitor: subtracted from the delay for the "
+               "mic capture + playback buffers (~60 ms); raise it if the voice still lags the picture")
+p.add_argument("--camera-latency-ms", type=float, default=None, help="camera -> bridge delay to add for the total "
+               "latency (default: the last measurement in .tmp/camera_latency.json; measure with --measure-camera-latency, "
+               "/measure or the dashboard button)")
+p.add_argument("--measure-camera-latency", action="store_true", help="at start: a black/white flashing full-screen "
+               "window for 15 s; point the camera at it -> exact camera -> bridge delay (saved)")
 p.add_argument("--no-camera-fix", action="store_true", help="don't lock the v4l2 camera's frame rate (by default the "
                "bridge sets exposure_dynamic_framerate=0 so a webcam keeps 30 fps in dim light instead of dropping to "
                "~15-17, which caps the whole pipeline's fps)")
@@ -164,6 +174,8 @@ class Source:
     """Input: a v4l2 camera, a live network stream (phone: srt:// / rtmp:// / rtsp:// / udp://, see
     cloud/docs/iphone-camera.md) or a file/URL played in real time. Live sources are drained by a thread and read()
     returns the newest frame; the measured input fps is in .fps()."""
+    probe = None  # list -> (arrival time, mean brightness) per frame, for the camera latency measurement
+
     def __init__(self, spec):
         self.spec = spec
         self.net = spec.split("://")[0].lower() in NET_SCHEMES
@@ -244,6 +256,8 @@ class Source:
                     self.latest, self.n = f, self.n + 1
                     self.pending.append((time.time(), f))
                     self.cv.notify_all()
+                if self.probe is not None:
+                    self.probe.append((time.time(), float(f[::16, ::16].mean())))
             self.proc.kill()
             print(f"[bridge] stream ended after {got} frames; waiting again", flush=True)
             time.sleep(1)
@@ -306,6 +320,8 @@ class Source:
                 self.latest, self.n = f, self.n + 1
                 self.pending.append((time.time(), f))
                 self.cv.notify_all()
+            if self.probe is not None:
+                self.probe.append((time.time(), float(f[::16, ::16].mean())))
 
     def read(self):
         if self.live:
@@ -557,6 +573,47 @@ async def main():
     queue = collections.deque()          # (frame, t_capture_ms)
     stats = collections.Counter()
     lat = []
+    import av_sync
+    cal = av_sync.load_camera_latency()
+    avs = {"cam_ms": args.camera_latency_ms if args.camera_latency_ms is not None else (cal or {}).get("ms"),
+           "cam_src": "--camera-latency-ms" if args.camera_latency_ms is not None else
+           (f"measured {cal['measured']} ({cal['source']})" if cal else None), "measuring": False}
+
+    def total_ms():
+        """camera -> bridge (measured once) + bridge capture -> played (live median of the last ~10 s)."""
+        l = sorted(lat[-250:])
+        if not l:
+            return None
+        return l[len(l) // 2] + (avs["cam_ms"] or 0)
+
+    def measure_camera():
+        if avs["measuring"]:
+            return
+        avs["measuring"] = True
+        log = Path(__file__).resolve().parents[2] / ".tmp" / "blink_log.txt"
+        log.parent.mkdir(exist_ok=True)
+        print("[bridge] camera latency test: point the camera at the flashing window (15 s)", flush=True)
+        src.probe = []
+        av_sync.start_blink(15, log).wait()
+        samples, src.probe = src.probe, None
+        lag, c = av_sync.analyze(samples, log)
+        if lag is not None and c > 0.5:
+            d = av_sync.save_camera_latency(lag, args.input, c)
+            avs.update(cam_ms=d["ms"], cam_src=f"measured {d['measured']} ({args.input})")
+            print(f"[bridge] camera -> bridge latency: {lag} ms (match {c:.2f}); saved", flush=True)
+        else:
+            print(f"[bridge] camera latency test failed (match {c:.2f}, {len(samples)} frames): was the flashing "
+                  "window filling most of the camera view?", flush=True)
+        avs["measuring"] = False
+
+    monitor = None
+    if args.audio_monitor:
+        monitor = av_sync.AudioMonitor(args.monitor_source, lambda: (lambda t: None if t is None else
+                                                                  max(0, t - args.monitor_offset_ms))(total_ms())).start()
+        print(f"[bridge] audio monitor: {args.monitor_source} -> default output, delayed by the total latency "
+              "(use headphones)", flush=True)
+    if args.measure_camera_latency:
+        threading.Thread(target=measure_camera, daemon=True).start()
     stop = asyncio.Event()
     t_end = time.time() + args.seconds if args.seconds else None
 
@@ -693,7 +750,10 @@ async def main():
                       "g2g_ms": round(l[len(l) // 2]) if l else None,
                       "session": {k: start.get(k) for k in ("kv_reset_frames", "freeze_kv_on_static", "detection_mode")},
                       "facefix_available": ff is not None, "facefix_on": sess["ff_on"], "input_fps": src.fps(),
-                      "input_live": src.live}
+                      "input_live": src.live, "camera_ms": avs["cam_ms"], "camera_ms_source": avs["cam_src"],
+                      "measuring": avs["measuring"],
+                      "total_ms": round(total_ms()) if total_ms() is not None else None,
+                      "audio_monitor": dict(monitor.stats) if monitor else None}
                 if ff is not None:
                     ms = sorted(ff.ms)
                     tot = ff.stats["hit"] + ff.stats["miss"]
@@ -714,6 +774,9 @@ async def main():
 
             async def apply(cmd):
                 """One handler for terminal lines and dashboard commands (dashboard.py lists the commands)."""
+                if "measure_camera" in cmd:
+                    threading.Thread(target=measure_camera, daemon=True).start()
+                    return
                 if "quit" in cmd:
                     quit_ev.set()
                     stop.set()
@@ -786,7 +849,8 @@ async def main():
                     threading.Thread(target=reader, daemon=True).start()
                     print("[bridge] type a new prompt + Enter to change it; /r = reset memory; /q = quit"
                           + ("; /gain <lip|eye|brow|all> <value> = face motion gain" if ff is not None else "")
-                          + "; /stats on|off = periodic stats line", flush=True)
+                          + "; /stats on|off = periodic stats line"
+                          "; /measure = camera latency test", flush=True)
                 if args.dashboard and not ui["dash"]:
                     ui["dash"] = True
                     import dashboard
@@ -812,6 +876,9 @@ async def main():
                             say("usage: /stats on|off")
                             continue
                         say(f"periodic stats {'on' if ui.get('stats', True) else 'off'}")
+                        continue
+                    if line == "/measure":
+                        await apply({"measure_camera": True})
                         continue
                     if line in ("/q", "/quit"):
                         await apply({"quit": True})
@@ -922,7 +989,9 @@ async def main():
                             fx = (f" facefix hit {ff.stats['hit']}/{tot}" +
                                   (f" render {ms[len(ms) // 2]:.0f} ms" if ms else ""))
                         print(f"[bridge] played {stats['played']} repeated {stats['repeated']} dropped {stats['dropped']} "
-                              f"queue {len(queue)} glass-to-glass median {l[len(l) // 2]:.0f} ms{fx}"
+                              f"queue {len(queue)} glass-to-glass median {l[len(l) // 2]:.0f} ms"
+                              + (f" (total incl. camera {l[len(l) // 2] + avs['cam_ms']:.0f} ms)" if avs["cam_ms"] else "")
+                              + f"{fx}"
                               + (f" input {src.fps()} fps" if src.live else "")
                               + (" (camera slower than the send rate: low light? try --camera-exposure 30)"
                                  if src.live and src.fps() and src.fps() < args.fps - 3 else "") if l else "",
@@ -965,6 +1034,8 @@ async def main():
         ms = sorted(ff.ms)
         res["facefix"] = {**ff.stats, "hit_rate": round(ff.stats["hit"] / tot, 3) if tot else None,
                           "render_ms_median": round(ms[len(ms) // 2], 1) if ms else None}
+        if monitor is not None:
+            monitor.close()
         if ff.audio is not None:
             w = sorted(ff.audio_wait)
             res["audio_driver"] = {**ff.audio.stats, "capture_to_motion_median_s": round(w[len(w) // 2], 3) if w else None,

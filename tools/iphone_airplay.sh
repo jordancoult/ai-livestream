@@ -15,6 +15,6 @@ if [ "${HOTSPOT:-0}" = 1 ]; then
   [ -f "$S" ] || { echo "missing $S"; exit 1; }
   bash <(sed '/^uxplay /,$d' "$S") || exit 1
 fi
-SINK="nvh264enc preset=low-latency-hq zerolatency=true bitrate=$BITRATE gop-size=$FPS ! h264parse ! mpegtsmux ! srtsink uri=srt://127.0.0.1:$SRT_PORT?mode=caller&latency=20 wait-for-connection=false"
+SINK="nvh264enc preset=low-latency-hq zerolatency=true bitrate=$BITRATE gop-size=$FPS ! h264parse config-interval=-1 ! mpegtsmux ! srtsink uri=srt://127.0.0.1:$SRT_PORT?mode=caller&latency=20 wait-for-connection=false"
 echo "UxPlay -> SRT 127.0.0.1:$SRT_PORT ($FPS fps, $BITRATE kbit/s). Mirror the iPhone to \"JoyAI-Cam\"."
 exec uxplay -n JoyAI-Cam -nh -vsync no -fps "$FPS" -reset 0 ${ROTATE:+-r $ROTATE} -vs "$SINK"

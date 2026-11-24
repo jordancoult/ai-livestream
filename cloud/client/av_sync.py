@@ -2,7 +2,8 @@
 
 The picture comes back through a pipeline with a varying delay; your voice (the mic) does not. AVSync delays the mic by
 
-    delay = camera chain (video arrives after its sound; measured by the sync test, saved per input kind)
+    delay = camera chain (video arrives after its sound; measured by the sync test, saved per input + audio source;
+                          ~0 when the audio travels with the video, e.g. a source that already lip-syncs it)
           + pipeline     (input frame arrived -> its output frame played; measured continuously, median of ~5 s)
           - the monitor's playback buffer + a manual adjust (normally 0)
 
@@ -161,7 +162,10 @@ def _brightness(frame):
 
 class AVSync:
     def __init__(self, input_kind, input_name, monitor_source=None, adjust_ms=0.0, log=print, window_frames=125):
-        self.kind, self.name, self.adjust_ms, self.log = input_kind, input_name, adjust_ms, log
+        # the camera chain depends on the input AND the audio path (e.g. AirPlay audio already matches its picture, a
+        # laptop mic does not): saved per (input, audio source), re-measured by every sync test
+        self.kind = f"{input_kind}|{input_name}|{monitor_source or '-'}"
+        self.name, self.adjust_ms, self.log = input_name, adjust_ms, log
         self.lat = collections.deque(maxlen=window_frames)   # ms, input arrival -> played
         self.chain_ms = load_chain().get(input_kind, {}).get("ms", 0)
         self.test = {"running": False}

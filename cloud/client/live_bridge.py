@@ -90,13 +90,8 @@ p.add_argument("--no-reconnect", action="store_true", help="exit when the server
 p.add_argument("--save-input", default=None, help="write the frames as sent (generation size) to this mp4 and "
                "<name>.json with source_seq per played frame (for client/mouth_sync.py)")
 args = p.parse_args()
-if args.face_driver == "audio":  # tested 2026-11-23: Ditto shares the GPU with lpfast -> its motion is ready ~0.8 s after
-    # capture (p90 ~1 s); 4 more frames of playout buffer + waiting up to 150 ms for a late frame -> 94 % animated
-    # frames, misses hold the previous animated frame (glass-to-glass ~1.14 s instead of ~0.87 s)
-    if "--buffer" not in sys.argv:
-        args.buffer = 10
-    if "--facefix-wait" not in sys.argv:
-        args.facefix_wait = 150
+# (--face-driver audio: Ditto runs in its own process; its motion is ready ~0.47 s after capture (p90 0.57), before the
+# JoyAI frame arrives, so the normal playout buffer is enough: tested 2026-11-23, 99.7 % animated frames)
 if args.facefix_preset:  # a preset implies its mode
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lpfast"))
     import json as _json
@@ -408,9 +403,9 @@ class FaceFixer:
         self.drv = self.pool_in.submit(self.lp.driver).result()
         self.audio = None
         if args.face_driver == "audio":
-            from audio_driver import AudioMotion, LiveAudioMotion  # loads Ditto (~10 s) before the session starts
+            from audio_driver import AudioMotion, LiveAudioMotionProc  # Ditto runs in its own process (GIL)
             self.AudioMotion = AudioMotion
-            self.live_audio = LiveAudioMotion(None, source=args.audio_source)
+            self.live_audio = LiveAudioMotionProc(None, source=args.audio_source)
             self.audio_starting = False
             self.audio_wait = collections.deque(maxlen=2000)
             self.pool_audio = ThreadPoolExecutor(4)  # lookups wait (briefly) for the motion of their capture time

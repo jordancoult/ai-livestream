@@ -155,11 +155,13 @@ class LiveAudioMotion:
                     sdk.warp_f3d_queue.put(None)
                     break
                 _, x_d_info, _ = item  # (its first field is the SOURCE frame index: 0 for a still image)
-                out.append((len(out), {k: np.asarray(v, np.float32) for k, v in x_d_info.items()}))
+                out.append((self.n_out, {k: np.asarray(v, np.float32) for k, v in x_d_info.items()}))
+                self.n_out += 1
                 with self.cond:
                     self.cond.notify_all()
         sdk._motion_stitch_worker = stitch_worker
         self.cond = threading.Condition()
+        self.n_out = 0
         self.source, self.face_img, self.steps, self.window = source, face_img and str(face_img), steps, window
         self.offset = offset_frames      # measured alignment between audio time and motion frame index
         self.t0 = None                   # wall-clock time of audio sample 0
@@ -240,3 +242,96 @@ class LiveAudioMotion:
         # frames arrive in order; index from the end
         j = len(self.frames) - 1 - (self.frames[-1][0] - idx)
         return self.frames[max(0, min(len(self.frames) - 1, j))][1]
+
+
+
+def _serve(face_img, source, steps, window):
+    """`python audio_driver.py serve FACE SOURCE STEPS WINDOW`: Ditto streaming in its own process. Binary records on
+    the original stdout: b'T' + float64 t0, then b'F' + int32 index + 63 float32 per motion frame. Logs go to stderr."""
+    import struct
+    import time
+    out = os.fdopen(os.dup(1), "wb", buffering=0)
+    os.dup2(2, 1)  # Ditto's prints -> stderr
+    live = LiveAudioMotion(face_img, source=source, steps=int(steps), window=int(window))
+    base = live.frames.append
+
+    def append(x):
+        base(x)
+        out.write(b"F" + struct.pack("<i", x[0]) + np.asarray(x[1]["exp"], np.float32).reshape(-1).tobytes())
+        if len(live.frames) > 200:
+            del live.frames[:100]
+    live.frames.append = append
+    live.start()
+    while live.t0 is None:
+        time.sleep(0.02)
+    out.write(b"T" + struct.pack("<d", live.t0))
+    while True:
+        time.sleep(1)
+
+
+class LiveAudioMotionProc:
+    """LiveAudioMotion in its own process: Ditto's Python threads then don't compete with the bridge's camera / network
+    threads for the GIL (in-process it cut the camera loop to ~17-20 fps). Same API: face_img, start(), motion_at(t),
+    close(), stats."""
+
+    def __init__(self, face_img=None, source="default", steps=5, window=5):
+        import threading
+        self.face_img, self.source, self.steps, self.window = face_img, source, steps, window
+        self.frames = []          # (index, {"exp": array}) like LiveAudioMotion
+        self.t0 = None
+        self.cond = threading.Condition()
+        self.stats = {"late": 0, "frames": 0}
+        self.p = None
+
+    def start(self):
+        import subprocess
+        import threading
+        self.p = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "serve", str(self.face_img),
+                                   self.source, str(self.steps), str(self.window)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        import atexit
+        atexit.register(self.close)
+        threading.Thread(target=self._recv, daemon=True).start()
+        return self
+
+    def _recv(self):
+        import struct
+        rd = self.p.stdout
+        while True:
+            tag = rd.read(1)
+            if not tag:
+                return
+            if tag == b"T":
+                self.t0 = struct.unpack("<d", rd.read(8))[0]
+                continue
+            idx = struct.unpack("<i", rd.read(4))[0]
+            exp = np.frombuffer(rd.read(63 * 4), np.float32).copy()
+            with self.cond:
+                self.frames.append((idx, {"exp": exp}))
+                self.stats["frames"] += 1
+                if len(self.frames) > 3000:
+                    del self.frames[:1000]
+                self.cond.notify_all()
+
+    def close(self):
+        if self.p is not None and self.p.poll() is None:
+            self.p.kill()
+
+    def motion_at(self, t, timeout=1.0):
+        import time
+        if self.t0 is None or not self.frames:
+            return None
+        idx = int(round((t - self.t0) * 25))
+        deadline = time.time() + timeout
+        with self.cond:
+            while self.frames[-1][0] < idx and time.time() < deadline:
+                self.cond.wait(timeout=0.05)
+            if self.frames[-1][0] < idx:
+                self.stats["late"] += 1
+                return self.frames[-1][1]
+            j = len(self.frames) - 1 - (self.frames[-1][0] - idx)
+            return self.frames[max(0, min(len(self.frames) - 1, j))][1]
+
+
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "serve":
+    _serve(*sys.argv[2:6])

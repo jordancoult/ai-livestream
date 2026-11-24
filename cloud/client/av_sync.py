@@ -23,6 +23,23 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[2]
 CAL_FILE = REPO / ".tmp" / "camera_latency.json"
 SR, BLOCK = 48000, 480  # 10 ms blocks
+PLAY_LATENCY_MS = 30    # pacat --latency-msec
+CHAIN_FILE = REPO / ".tmp" / "av_chain.json"
+
+
+def load_chain():
+    """{input kind: {"ms": video arrives this much after its sound, ...}} from the A/V sync tests."""
+    try:
+        return json.loads(CHAIN_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_chain(kind, ms, source, score):
+    d = load_chain()
+    d[kind] = {"ms": round(ms), "source": source, "score": round(score, 3), "measured": time.strftime("%Y-%m-%d %H:%M:%S")}
+    CHAIN_FILE.parent.mkdir(exist_ok=True)
+    CHAIN_FILE.write_text(json.dumps(d))
 
 
 class AudioMonitor:
@@ -30,13 +47,16 @@ class AudioMonitor:
         self.source, self.get_delay_ms = source, get_delay_ms
         self.stop = threading.Event()
         self.stats = {"delay_ms": None, "dropped": 0, "inserted": 0}
+        self.mute = False    # sync test: keep timing, play silence (no speaker -> mic feedback loop)
+        self.record = None   # sync test: list -> (write time, block) of what is played
+        self.record_in = None  # sync test: list -> (capture time, block) as captured (undelayed)
 
     def start(self):
         self.cap = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-f", "pulse", "-fragment_size", "1920", "-i",
                                      self.source, "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"],
                                     stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
         self.play = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1",
-                                      "--latency-msec=30", "--stream-name=bridge-monitor"], stdin=subprocess.PIPE)
+                                      f"--latency-msec={PLAY_LATENCY_MS}", "--stream-name=bridge-monitor"], stdin=subprocess.PIPE)
         threading.Thread(target=self._run, daemon=True).start()
         return self
 
@@ -48,6 +68,8 @@ class AudioMonitor:
             if len(b) < BLOCK * 2:
                 return
             buf.append(b)
+            if self.record_in is not None:
+                self.record_in.append((time.time(), b))
             target = self.get_delay_ms()
             if target is None:
                 continue  # until the first latency measurement: keep buffering, play nothing
@@ -63,7 +85,9 @@ class AudioMonitor:
                 out = [buf.popleft()]
             try:
                 for o in out:
-                    self.play.stdin.write(o)
+                    if self.record is not None:
+                        self.record.append((time.time(), o))
+                    self.play.stdin.write(silence if self.mute else o)
             except (BrokenPipeError, ValueError):
                 return
 
@@ -88,8 +112,9 @@ def save_camera_latency(ms, source, score):
     return d
 
 
-def start_blink(seconds, log_path):
-    return subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "blink", str(seconds), str(log_path)])
+def start_blink(seconds, log_path, beep=False):
+    return subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "blink", str(seconds), str(log_path)]
+                            + (["beep"] if beep else []))
 
 
 def analyze(samples, log_path, max_lag_ms=1500):
@@ -117,8 +142,14 @@ def analyze(samples, log_path, max_lag_ms=1500):
     return best
 
 
-def _blink(seconds, log_path):
+def _blink(seconds, log_path, beep=False):
     import cv2
+    pa = None
+    if beep:  # 120 ms 1 kHz beep on the default output at every switch to white
+        pa = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1", "--latency-msec=20",
+                               "--stream-name=sync-test-beep"], stdin=subprocess.PIPE)
+        tt = np.arange(int(0.12 * SR)) / SR
+        tone = (0.6 * 32767 * np.sin(2 * np.pi * 1000 * tt) * np.minimum(1, np.minimum(tt, 0.12 - tt) / 0.005)).astype(np.int16).tobytes()
     w = "Point the camera at this window (latency test)"
     cv2.namedWindow(w, cv2.WINDOW_NORMAL)
     cv2.setWindowProperty(w, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
@@ -131,6 +162,8 @@ def _blink(seconds, log_path):
             level = 1 - level
             cv2.imshow(w, white if level else black)
             cv2.waitKey(1)
+            if pa is not None and level:
+                pa.stdin.write(tone); pa.stdin.flush()
             f.write(f"{time.time():.4f} {level}\n"); f.flush()
             hold = 0.25 + 0.5 * rng.random()  # irregular intervals: one unambiguous best lag
             t_next = time.time() + hold
@@ -139,5 +172,33 @@ def _blink(seconds, log_path):
     cv2.destroyAllWindows()
 
 
+def sync_offset(frames, audio, pa_latency_ms=PLAY_LATENCY_MS, max_ms=600):
+    """frames: [(play time, mean brightness)], audio: [(write time, s16 block)] -> (audio minus video ms, score).
+    Video onsets = rises in brightness, audio onsets = beep energy; positive = audio LATE."""
+    if len(frames) < 50 or len(audio) < 100:
+        return None, 0.0
+    t0 = max(frames[0][0], audio[0][0]); t1 = min(frames[-1][0], audio[-1][0])
+    grid = np.arange(t0, t1, 0.005)
+    ft = np.array([f[0] for f in frames]); fb = np.array([f[1] for f in frames])
+    vb = fb[np.clip(np.searchsorted(ft, grid, side="right") - 1, 0, len(fb) - 1)]
+    v = np.maximum(0, np.diff(vb, prepend=vb[0]))
+    at = np.array([a[0] for a in audio]) + pa_latency_ms / 1000
+    ae = np.array([np.abs(np.frombuffer(a[1], np.int16)).mean() for a in audio], np.float64)
+    ag = ae[np.clip(np.searchsorted(at, grid, side="right") - 1, 0, len(ae) - 1)]
+    a = np.maximum(0, np.diff(ag, prepend=ag[0]))
+    box = np.ones(8) / 8  # 40 ms: onsets quantized to frames (40 ms) and blocks (10 ms) still overlap
+    v, a = np.convolve(v, box, "same"), np.convolve(a, box, "same")
+    best = (None, -1.0)
+    for lag in range(-max_ms, max_ms + 1, 5):
+        k = lag // 5
+        x, y = (a[k:], v[:len(v) - k]) if k >= 0 else (a[:k], v[-k:])
+        if len(x) < 200 or x.std() == 0 or y.std() == 0:
+            continue
+        c = float(np.corrcoef(x, y)[0, 1])
+        if c > best[1]:
+            best = (lag, c)
+    return best
+
+
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "blink":
-    _blink(sys.argv[2], sys.argv[3])
+    _blink(sys.argv[2], sys.argv[3], beep=len(sys.argv) > 4 and sys.argv[4] == "beep")

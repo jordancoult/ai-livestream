@@ -55,13 +55,15 @@ p.add_argument("--audio-monitor", action="store_true", help="play your mic to th
                "by the pipeline latency measured continuously (input frame arrival -> played), so the output window "
                "and your voice are in sync")
 p.add_argument("--monitor-source", default="default", help="--audio-monitor mic (PulseAudio source; pactl list short sources)")
-p.add_argument("--monitor-offset-ms", type=float, default=60, help="--audio-monitor: subtracted from the delay for the "
-               "mic capture + playback buffers (~60 ms); raise it if the voice lags the picture, lower it if it leads")
+p.add_argument("--monitor-offset-ms", type=float, default=0, help="--audio-monitor: manual adjustment added to the "
+               "automatic delay (+ = audio later); normally 0: run the A/V sync test instead")
 p.add_argument("--camera-latency-ms", type=float, default=None, help="camera -> bridge delay to add for the total "
                "latency (default: the last measurement in .tmp/camera_latency.json; measure with --measure-camera-latency, "
                "/measure or the dashboard button)")
 p.add_argument("--measure-camera-latency", action="store_true", help="at start: a black/white flashing full-screen "
                "window for 15 s; point the camera at it -> exact camera -> bridge delay (saved)")
+p.add_argument("--synctest-auto", type=float, default=None, help="(testing) start the A/V sync test N s after the start "
+               "WITHOUT the flashing window: the input itself must contain flashes + beeps (tools/av_sync_selftest.sh)")
 p.add_argument("--no-camera-fix", action="store_true", help="don't lock the v4l2 camera's frame rate (by default the "
                "bridge sets exposure_dynamic_framerate=0 so a webcam keeps 30 fps in dim light instead of dropping to "
                "~15-17, which caps the whole pipeline's fps)")
@@ -176,6 +178,7 @@ class Source:
     cloud/docs/iphone-camera.md) or a file/URL played in real time. Live sources are drained by a thread and read()
     returns the newest frame; the measured input fps is in .fps()."""
     probe = None  # list -> (arrival time, mean brightness) per frame, for the camera latency measurement
+    last_arrival = None  # live: when the frame read() returned arrived (it may wait in the burst queue up to 120 ms)
 
     def __init__(self, spec):
         self.spec = spec
@@ -218,6 +221,8 @@ class Source:
         u = self.spec
         if u.startswith("srt://") and "mode=" not in u and ("//0.0.0.0" in u or "//:" in u):
             u += ("&" if "?" in u else "?") + "mode=listener"
+            if "latency=" not in u:  # SRT buffers max(sender, receiver) latency; ffmpeg's default 120 ms is a fixed
+                u += "&latency=20000"  # delay for local senders (UxPlay); a phone app asking more still gets it (us)
         return u
 
     def _grab_net(self):
@@ -232,7 +237,8 @@ class Source:
                    else f"scale={iw}:{ih}:force_original_aspect_ratio=decrease,pad={iw}:{ih}:(ow-iw)/2:(oh-ih)/2")
             raw = str(Path(__file__).resolve().parents[2] / ".tmp" / "net_input_raw.png")
             Path(raw).parent.mkdir(exist_ok=True)
-            cmd = ["ffmpeg", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "500000",
+            cmd = ["ffmpeg", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-threads", "1",
+                   "-probesize", "500000",
                    "-analyzeduration", "500000", *listen, "-i", u, "-an",
                    "-map", "0:v", "-frames:v", "1", "-update", "1", "-y", raw,      # first raw frame, as received
                    "-map", "0:v", "-vf", rot + fit, "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
@@ -336,7 +342,8 @@ class Source:
                 while len(self.pending) > 1 and now - self.pending[0][0] > 0.12:
                     self.pending.popleft()
                 self.n_read = self.n
-                return self.pending.popleft()[1]
+                self.last_arrival, f = self.pending.popleft()
+                return f
         want = int((time.time() - self.t0) * self.src_fps)  # real-time pacing for files
         f = None
         while self.i <= want:
@@ -580,6 +587,18 @@ async def main():
            "cam_src": "--camera-latency-ms" if args.camera_latency_ms is not None else
            (f"measured {cal['measured']} ({cal['source']})" if cal else None), "measuring": False}
 
+    chain_key = "net" if src.net else ("webcam" if src.live else "file")
+    chain_all = av_sync.load_chain()
+    avs["chain_ms"] = chain_all.get(chain_key, {}).get("ms", 0)
+
+    def monitor_delay():
+        """audio delay = input arrives after its sound (camera chain vs mic; from the last sync test for this input
+        kind) + bridge arrival -> played (continuous) - the monitor's playback buffer + manual adjust."""
+        p = pipeline_ms()
+        if p is None:
+            return None
+        return max(0, p + avs["chain_ms"] - av_sync.PLAY_LATENCY_MS + args.monitor_offset_ms)
+
     def pipeline_ms():
         """bridge frame arrival -> played, live median of the last ~5 s (what the audio must be delayed by: the
         camera's own delay is already in the audio, which arrives in sync with the camera picture)."""
@@ -615,10 +634,90 @@ async def main():
 
     monitor = None
     if args.audio_monitor:
-        monitor = av_sync.AudioMonitor(args.monitor_source, lambda: (lambda t: None if t is None else
-                                                                  max(0, t - args.monitor_offset_ms))(pipeline_ms())).start()
+        monitor = av_sync.AudioMonitor(args.monitor_source, monitor_delay).start()
         print(f"[bridge] audio monitor: {args.monitor_source} -> default output, delayed by the live pipeline latency "
               "(measured continuously; use headphones)", flush=True)
+    synctest = {"frames": None, "running": False, "result": None}
+
+    def run_synctest():
+        """Beep + flash test: the flashing window beeps at every flash; the camera sees the flash, the mic hears the
+        beep. Records the played frames and the monitor's delayed audio -> measured A/V offset + a clip to watch."""
+        if synctest["running"]:
+            return
+        if monitor is None:
+            print("[bridge] sync test needs --audio-monitor", flush=True)
+            return
+        synctest.update(running=True, result=None)
+        print("[bridge] A/V sync test: point the camera at the flashing window, play the beeps on the SPEAKERS (not "
+              "headphones) so the mic hears them; 15 s", flush=True)
+        log = Path(__file__).resolve().parents[2] / ".tmp" / "blink_log.txt"
+        log.parent.mkdir(exist_ok=True)
+        monitor.mute, monitor.record, monitor.record_in, synctest["frames"], src.probe = True, [], [], [], []
+        if args.synctest_auto is None:
+            av_sync.start_blink(15, log, beep=True).wait()
+        else:
+            time.sleep(15)
+        time.sleep(((pipeline_ms() or 1000) + 500) / 1000)   # let the last flashes come through
+        frames, audio, audio_in, arrivals = synctest["frames"], monitor.record, monitor.record_in, src.probe
+        synctest["frames"], monitor.record, monitor.record_in, src.probe, monitor.mute = None, None, None, None, False
+        # where the time goes: input arrival vs undelayed audio (= camera chain relative to the mic)
+        cam_off, cam_c = av_sync.sync_offset(arrivals, audio_in, pa_latency_ms=0)
+        if cam_off is not None and cam_c > 0.5:   # applied from now on (and saved for this input kind)
+            avs["chain_ms"] = -cam_off
+            av_sync.save_chain(chain_key, -cam_off, args.input, cam_c)
+        l = sorted(lat[-125:])
+        print(f"[bridge] sync test detail: input frames arrive {-cam_off if cam_off is not None else '?'} ms after "
+              f"their audio (match {cam_c:.2f}); pipeline (arrival->played) median {l[len(l)//2] if l else '?'} ms; "
+              f"audio delay applied {monitor.stats['delay_ms']} ms", flush=True)
+        off, c = av_sync.sync_offset([(t, b) for t, b, _ in frames], audio)
+        res = {"offset_ms": off, "match": round(c, 2), "delay_ms": monitor.stats["delay_ms"],
+               "chain_ms": avs["chain_ms"]}
+        if off is None or c < 0.3:
+            msg = f"sync test inconclusive (match {c:.2f}): flash filling the camera view? beeps audible to the mic?"
+        else:
+            msg = (f"A/V offset: audio {abs(off)} ms {'LATE' if off > 0 else 'EARLY'} vs the picture (match {c:.2f}); "
+                   f"camera chain {avs['chain_ms']:.0f} ms now applied automatically (saved); run the test again to "
+                   "verify" if abs(off) > 20 else
+                   f"A/V in sync: audio {off:+d} ms (match {c:.2f})")
+        try:
+            res["clip"] = _synctest_clip(frames, audio)
+            msg += f"; clip: {res['clip']}"
+        except Exception as e:  # noqa: BLE001
+            msg += f" (clip failed: {e})"
+        synctest.update(running=False, result={**res, "msg": msg})
+        print("[bridge] " + msg, flush=True)
+
+    def _synctest_clip(frames, audio):
+        """Played frames + the delayed audio on one timeline (what you'd see and hear), 25 fps mp4."""
+        import wave
+        out_dir = Path.home() / "Videos" / "ai-livestream-tests"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        t0 = max(frames[0][0], audio[0][0]); t1 = min(frames[-1][0], audio[-1][0])
+        pcm = np.zeros(int((t1 - t0) * av_sync.SR) + av_sync.SR, np.int16)
+        for t, b in audio:
+            i = int((t + 0.03 - t0) * av_sync.SR)
+            x = np.frombuffer(b, np.int16)
+            if 0 <= i < len(pcm) - len(x):
+                pcm[i:i + len(x)] = x
+        tmp = Path(__file__).resolve().parents[2] / ".tmp"
+        with wave.open(str(tmp / "synctest.wav"), "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(av_sync.SR); w.writeframes(pcm.tobytes())
+        h, w_ = frames[0][2].shape[:2]
+        out = str(out_dir / "av-sync-test.mp4")
+        p = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w_}x{h}",
+                              "-r", "25", "-i", "-", "-i", str(tmp / "synctest.wav"), "-c:v", "libx264", "-pix_fmt",
+                              "yuv420p", "-profile:v", "high", "-level", "4.1", "-c:a", "aac", "-shortest",
+                              "-movflags", "+faststart", out], stdin=subprocess.PIPE)
+        ft = [f[0] for f in frames]
+        import bisect
+        for k in range(int((t1 - t0) * 25)):
+            j = max(0, bisect.bisect_right(ft, t0 + k / 25) - 1)
+            p.stdin.write(frames[j][2].tobytes())
+        p.stdin.close(); p.wait()
+        return out
+
+    if args.synctest_auto is not None:
+        threading.Timer(args.synctest_auto, run_synctest).start()
     if args.measure_camera_latency:
         threading.Thread(target=measure_camera, daemon=True).start()
     stop = asyncio.Event()
@@ -672,6 +771,7 @@ async def main():
                         stop.set()
                         break
                     frame = await asyncio.to_thread(src.read) if src.live else src.read()
+                    t_arr = src.last_arrival if src.live and src.last_arrival else time.time()
                     if frame is None:
                         await asyncio.sleep(0.005)
                         continue
@@ -691,7 +791,7 @@ async def main():
                         sess["enc"], sess["new_enc"] = new_enc(), False
                     data = b"".join(bytes(pk) for pk in sess["enc"].encode(vf))
                     seq += 1
-                    await ws.send(json.dumps({"type": "frame_meta", "seq": seq, "t_capture_ms": time.time() * 1000}))
+                    await ws.send(json.dumps({"type": "frame_meta", "seq": seq, "t_capture_ms": t_arr * 1000}))
                     await ws.send(data)
                     next_send = max(next_send + 1.0 / args.fps, time.time() - 0.2)
                     await asyncio.sleep(max(0.0, next_send - time.time()))
@@ -761,7 +861,8 @@ async def main():
                       "measuring": avs["measuring"],
                       "total_ms": round(total_ms()) if total_ms() is not None else None,
                       "pipeline_ms": round(pipeline_ms()) if pipeline_ms() is not None else None,
-                      "audio_monitor": dict(monitor.stats) if monitor else None}
+                      "audio_monitor": dict(monitor.stats) if monitor else None, "chain_ms": avs["chain_ms"],
+                      "synctest": {"running": synctest["running"], **(synctest["result"] or {})}}
                 if ff is not None:
                     ms = sorted(ff.ms)
                     tot = ff.stats["hit"] + ff.stats["miss"]
@@ -782,6 +883,9 @@ async def main():
 
             async def apply(cmd):
                 """One handler for terminal lines and dashboard commands (dashboard.py lists the commands)."""
+                if "synctest" in cmd:
+                    threading.Thread(target=run_synctest, daemon=True).start()
+                    return
                 if "measure_camera" in cmd:
                     threading.Thread(target=measure_camera, daemon=True).start()
                     return
@@ -858,7 +962,7 @@ async def main():
                     print("[bridge] type a new prompt + Enter to change it; /r = reset memory; /q = quit"
                           + ("; /gain <lip|eye|brow|all> <value> = face motion gain" if ff is not None else "")
                           + "; /stats on|off = periodic stats line"
-                          "; /measure = camera latency test", flush=True)
+                          "; /synctest = beep+flash A/V sync test", flush=True)
                 if args.dashboard and not ui["dash"]:
                     ui["dash"] = True
                     import dashboard
@@ -884,6 +988,9 @@ async def main():
                             say("usage: /stats on|off")
                             continue
                         say(f"periodic stats {'on' if ui.get('stats', True) else 'off'}")
+                        continue
+                    if line == "/synctest":
+                        await apply({"synctest": True})
                         continue
                     if line == "/measure":
                         await apply({"measure_camera": True})
@@ -971,6 +1078,9 @@ async def main():
                                 last = last_raw
                         if tcap:
                             lat.append(time.time() * 1000 - tcap)
+                        if synctest["frames"] is not None and last is not None:
+                            synctest["frames"].append((time.time(), float(last[::8, ::8].mean()),
+                                                       cv2.resize(last, (240, round(240 * last.shape[0] / last.shape[1] / 2) * 2))))
                         stats["played"] += 1
                     else:
                         stats["repeated"] += 1

@@ -167,6 +167,7 @@ class Source:
         self.stamps = collections.deque(maxlen=90)
         if self.net:
             self.latest, self.n, self.n_read, self.proc = None, 0, 0, None
+            self.pending = collections.deque(maxlen=2)
             self.cv = threading.Condition()
             threading.Thread(target=self._grab_net, daemon=True).start()
             import atexit
@@ -185,6 +186,7 @@ class Source:
             # So a thread drains the camera continuously and read() returns the newest frame (even skipping).
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             self.latest, self.n, self.n_read = None, 0, 0
+            self.pending = collections.deque(maxlen=2)
             self.cv = threading.Condition()
             threading.Thread(target=self._grab, daemon=True).start()
 
@@ -226,6 +228,7 @@ class Source:
                 self.stamps.append(time.time())
                 with self.cv:
                     self.latest, self.n = f, self.n + 1
+                    self.pending.append(f)
                     self.cv.notify_all()
             self.proc.kill()
             print(f"[bridge] stream ended after {got} frames; waiting again", flush=True)
@@ -287,16 +290,18 @@ class Source:
             self.stamps.append(time.time())
             with self.cv:
                 self.latest, self.n = f, self.n + 1
+                self.pending.append(f)
                 self.cv.notify_all()
 
     def read(self):
         if self.live:
-            with self.cv:  # newest frame; wait (briefly) only if we already returned it
-                self.cv.wait_for(lambda: self.n != self.n_read, timeout=0.1)
-                if self.n == self.n_read:
+            with self.cv:  # oldest unsent of the last 2 frames: bursty sources (AirPlay delivers frame pairs) keep
+                # their full rate (newest-only sent every other frame: 26 fps in -> 13 to JoyAI); at most +1 frame lag
+                self.cv.wait_for(lambda: len(self.pending) > 0, timeout=0.1)
+                if not self.pending:
                     return None
                 self.n_read = self.n
-                return self.latest
+                return self.pending.popleft()
         want = int((time.time() - self.t0) * self.src_fps)  # real-time pacing for files
         f = None
         while self.i <= want:

@@ -7,8 +7,8 @@
 #      HOTSPOT=1 tools/iphone_airplay.sh  (direct laptop hotspot "UxPlay_Direct", lowest latency; asks for sudo; based on
 #                                          ~/personal/phone-stream/hotspot-screen-mirror.sh)
 #   3. iPhone: Control Center -> Screen Mirroring -> "JoyAI-Cam"; open the camera app full screen (portrait)
-# Env: FPS (30), BITRATE kbit/s (8000), SRT_PORT (9000), ROTATE (R = portrait like phone-stream; empty = no rotation)
-FPS=${FPS:-30}; BITRATE=${BITRATE:-8000}; SRT_PORT=${SRT_PORT:-9000}; ROTATE=${ROTATE-R}
+# Env: FPS (30), BITRATE kbit/s (8000), SRT_PORT (9000), ROTATE (empty = as mirrored [default]; R or L = rotate 90 deg, for a phone held in landscape)
+FPS=${FPS:-30}; BITRATE=${BITRATE:-8000}; SRT_PORT=${SRT_PORT:-9000}; ROTATE=${ROTATE-}
 if [ "${HOTSPOT:-0}" = 1 ]; then
   # reuse the hotspot part of the phone-stream script (everything before its uxplay line)
   S=~/personal/phone-stream/hotspot-screen-mirror.sh

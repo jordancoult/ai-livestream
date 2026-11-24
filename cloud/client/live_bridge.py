@@ -24,6 +24,7 @@ import asyncio
 import base64
 import collections
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -70,6 +71,13 @@ p.add_argument("--facefix-gains", default="", help="per-region motion gains, e.g
                "lip, eye, brow, brow2, rest; 1 = the speaker's motion as is, 0.5 = half, 0 = off, negative = "
                "mirrored). Defaults: rel lip=1.3 eye=1 brow=-1 (G-Star); abs lip/eye/brow/brow2/rest=1. "
                "Live: type '/gain lip 1.5', '/gain all 0.8' or '/gain' (show) + Enter")
+p.add_argument("--face-driver", default="webcam", choices=["webcam", "audio"],
+               help="what drives the face pass's expressions: webcam = your face (default); audio = your voice through "
+                    "Ditto (lip sync + speech expressions, runs on this GPU; cloud/lpfast/audio_driver.py)")
+p.add_argument("--audio-source", default="default", help="--face-driver audio: PulseAudio/PipeWire source name "
+               "('default' = system default mic; list with: pactl list short sources) or file:speech.wav (tests)")
+p.add_argument("--audio-face", default=None, help="--face-driver audio: a human face image that conditions Ditto's "
+               "motion (default: your first webcam frame)")
 p.add_argument("--facefix-wait", type=float, default=15, help="ms the player waits for a late refined frame")
 p.add_argument("--facefix-hold", type=int, default=2, help="on a miss, repeat the last refined frame if it is at "
                "most this many frames old (instead of popping to the raw frame)")
@@ -82,6 +90,13 @@ p.add_argument("--no-reconnect", action="store_true", help="exit when the server
 p.add_argument("--save-input", default=None, help="write the frames as sent (generation size) to this mp4 and "
                "<name>.json with source_seq per played frame (for client/mouth_sync.py)")
 args = p.parse_args()
+if args.face_driver == "audio":  # tested 2026-11-23: Ditto shares the GPU with lpfast -> its motion is ready ~0.8 s after
+    # capture (p90 ~1 s); 4 more frames of playout buffer + waiting up to 150 ms for a late frame -> 94 % animated
+    # frames, misses hold the previous animated frame (glass-to-glass ~1.14 s instead of ~0.87 s)
+    if "--buffer" not in sys.argv:
+        args.buffer = 10
+    if "--facefix-wait" not in sys.argv:
+        args.facefix_wait = 150
 if args.facefix_preset:  # a preset implies its mode
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lpfast"))
     import json as _json
@@ -391,11 +406,50 @@ class FaceFixer:
             self.lp.set_gain(**parse_gains(args.facefix_gains))
             self.lp.pose = False  # JoyAI output already moves the head; pose transfer is for still images
         self.drv = self.pool_in.submit(self.lp.driver).result()
+        self.audio = None
+        if args.face_driver == "audio":
+            from audio_driver import AudioMotion, LiveAudioMotion  # loads Ditto (~10 s) before the session starts
+            self.AudioMotion = AudioMotion
+            self.live_audio = LiveAudioMotion(None, source=args.audio_source)
+            self.audio_starting = False
+            self.audio_wait = collections.deque(maxlen=2000)
+            self.pool_audio = ThreadPoolExecutor(4)  # lookups wait (briefly) for the motion of their capture time
         gc.freeze()                                       # long-lived objects out of the GC: fewer pauses
         print(f"[bridge] facefix {args.facefix} (LivePortrait TensorRT, gains {self.lp.gains}) ready "
               f"({time.time() - t:.0f} s warm-up)", flush=True)
 
+    def _start_audio(self, frame):
+        """Register the conditioning face + start the mic stream, off the event loop (~1-2 s); until then the face
+        pass shows JoyAI's frames as they are."""
+        face = args.audio_face
+        if face is None:
+            face = str(Path(__file__).resolve().parent / ".audio_face.png")
+            cv2.imwrite(face, frame)
+        self.live_audio.face_img = face
+        self.live_audio.start()
+        self.audio = self.live_audio
+        print(f"[bridge] audio face driver: Ditto streaming from {args.audio_source} (conditioned on {face})", flush=True)
+
+    def _audio_drv(self, t):
+        if self.audio is None:
+            self.stats["audio_none"] += 1
+            return None
+        m = self.audio.motion_at(t, timeout=1.0)
+        self.audio_wait.append(time.time() - t)  # capture -> its motion available
+        if m is None:
+            self.stats["audio_none"] += 1
+            return None
+        return self.AudioMotion.as_driver(m)
+
     def add_input(self, seq, frame):
+        if args.face_driver == "audio":
+            if not self.audio_starting:
+                self.audio_starting = True
+                threading.Thread(target=self._start_audio, args=(frame.copy(),), daemon=True).start()
+            self.inputs[seq] = self.pool_audio.submit(self._audio_drv, time.time())
+            while len(self.inputs) > 300:
+                self.inputs.popitem(last=False)
+            return
         self.inputs[seq] = self.pool_in.submit(self.drv.analyze, frame)
         while len(self.inputs) > 300:
             self.inputs.popitem(last=False)
@@ -416,7 +470,20 @@ class FaceFixer:
             self.ms.append(1000 * (time.perf_counter() - t0))
             job["info"] = {k: info.get(k) for k in ("ok", "w")}
             return res
-        job["fut"] = self.pool_gpu.submit(render)
+        if fd.done():
+            job["fut"] = self.pool_gpu.submit(render)
+        else:
+            # the driver (audio motion) isn't ready yet: queue the render only when it is, so a waiting frame never
+            # blocks the GPU worker for the frames behind it
+            from concurrent.futures import Future
+            outer = Future()
+            job["fut"] = outer
+
+            def chain(_):
+                inner = self.pool_gpu.submit(render)
+                inner.add_done_callback(lambda f: outer.set_exception(f.exception()) if f.exception()
+                                        else outer.set_result(f.result()))
+            fd.add_done_callback(chain)
         return job
 
     def take(self, job):
@@ -865,6 +932,11 @@ async def main():
         ms = sorted(ff.ms)
         res["facefix"] = {**ff.stats, "hit_rate": round(ff.stats["hit"] / tot, 3) if tot else None,
                           "render_ms_median": round(ms[len(ms) // 2], 1) if ms else None}
+        if ff.audio is not None:
+            w = sorted(ff.audio_wait)
+            res["audio_driver"] = {**ff.audio.stats, "capture_to_motion_median_s": round(w[len(w) // 2], 3) if w else None,
+                                   "capture_to_motion_p90_s": round(w[int(len(w) * 0.9)], 3) if w else None}
+            ff.audio.close()
     print("[bridge] RESULT", json.dumps(res))
 
 
@@ -873,5 +945,12 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        raise
     finally:
         cleanup_downloads()
+        if args.face_driver == "audio":
+            sys.stdout.flush(); sys.stderr.flush()
+            os._exit(0)  # Ditto's worker threads are not daemons

@@ -47,6 +47,10 @@ p.add_argument("--camera-exposure", default="auto", help="v4l2 webcam exposure: 
                "it can stretch frames past 33 ms and drop to ~15 fps, which caps the whole pipeline) or a fixed exposure "
                "in ms, e.g. 30 (keeps 30 fps; darker, so gain is raised with --camera-gain)")
 p.add_argument("--camera-gain", type=int, default=None, help="v4l2 gain with a fixed exposure (default: camera's max/2+)")
+p.add_argument("--input-rotate", default="none", choices=["none", "cw", "ccw", "180"],
+               help="rotate a network/phone input before cropping (AirPlay mirrors can arrive sideways)")
+p.add_argument("--input-fit", default="crop", choices=["crop", "pad"], help="network input whose shape differs from "
+               "the session: crop = fill and cut the edges (default), pad = fit whole with black bars")
 p.add_argument("--no-camera-fix", action="store_true", help="don't lock the v4l2 camera's frame rate (by default the "
                "bridge sets exposure_dynamic_framerate=0 so a webcam keeps 30 fps in dim light instead of dropping to "
                "~15-17, which caps the whole pipeline's fps)")
@@ -210,10 +214,15 @@ class Source:
         u = self._net_url()
         listen = ["-listen", "1"] if u.startswith("rtmp://") and ("//0.0.0.0" in u) else []
         while True:
+            rot = {"none": "", "cw": "transpose=1,", "ccw": "transpose=2,", "180": "hflip,vflip,"}[args.input_rotate]
+            fit = (f"scale={iw}:{ih}:force_original_aspect_ratio=increase,crop={iw}:{ih}" if args.input_fit == "crop"
+                   else f"scale={iw}:{ih}:force_original_aspect_ratio=decrease,pad={iw}:{ih}:(ow-iw)/2:(oh-ih)/2")
+            raw = str(Path(__file__).resolve().parents[2] / ".tmp" / "net_input_raw.png")
+            Path(raw).parent.mkdir(exist_ok=True)
             cmd = ["ffmpeg", "-loglevel", "error", "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "500000",
-                   "-analyzeduration", "500000", *listen, "-i", u, "-an", "-vf",
-                   f"scale={iw}:{ih}:force_original_aspect_ratio=increase,crop={iw}:{ih}", "-f", "rawvideo",
-                   "-pix_fmt", "bgr24", "-"]
+                   "-analyzeduration", "500000", *listen, "-i", u, "-an",
+                   "-map", "0:v", "-frames:v", "1", "-update", "1", "-y", raw,      # first raw frame, as received
+                   "-map", "0:v", "-vf", rot + fit, "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
             print(f"[bridge] waiting for the stream on {u}", flush=True)
             self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
             got = 0
@@ -222,7 +231,12 @@ class Source:
                 if len(buf) < iw * ih * 3:
                     break
                 if not got:
-                    print("[bridge] stream connected", flush=True)
+                    try:
+                        rh, rw = cv2.imread(raw).shape[:2]
+                        print(f"[bridge] stream connected: {rw}x{rh} as received (first frame: {raw}); "
+                              f"rotate {args.input_rotate}, fit {args.input_fit}", flush=True)
+                    except Exception:  # noqa: BLE001
+                        print("[bridge] stream connected", flush=True)
                 got += 1
                 f = np.frombuffer(buf, np.uint8).reshape(ih, iw, 3)
                 self.stamps.append(time.time())

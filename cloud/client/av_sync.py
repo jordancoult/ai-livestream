@@ -1,62 +1,70 @@
-"""Audio/video sync helpers for live_bridge.py.
+"""Model-agnostic audio/video sync for live edit pipelines (camera -> any AI model -> played video + your voice).
 
-AudioMonitor: your mic, delayed by the live total latency, played to the default output (headphones!) so the local
-preview (ffplay) and your voice line up. Capture/playback through ffmpeg (pulse) + pacat, no extra Python deps. The
-delay follows a callable (ms) smoothly: 10 ms blocks are dropped or silence is added when it drifts by > 30 ms.
+The picture comes back through a pipeline with a varying delay; your voice (the mic) does not. AVSync delays the mic by
 
-Camera latency probe: a full-screen window flashes black/white (`python av_sync.py blink ...`, its own process); point
-the camera (webcam or phone) at it; the bridge records the input brightness at each frame's arrival and the lag that
-best matches the flash pattern = camera -> bridge latency (sensor, AirPlay/USB, encode, network, decode). Saved to
-.tmp/camera_latency.json and added to the bridge's own glass-to-glass time for the total.
+    delay = camera chain (video arrives after its sound; measured by the sync test, saved per input kind)
+          + pipeline     (input frame arrived -> its output frame played; measured continuously, median of ~5 s)
+          - the monitor's playback buffer + a manual adjust (normally 0)
+
+and plays it to the default output (headphones), following the live pipeline delay in 10 ms steps.
+
+Any pipeline integrates it with these calls (live_bridge.py is the reference):
+
+    sync = AVSync(input_kind="net", input_name=url, monitor_source="default")   # monitor_source=None: measure only
+    source.on_frame = sync.on_input            # input thread, at every frame's arrival: (t_arrival, frame)
+    sync.on_played(t_arrival, frame)           # at playout, with the ARRIVAL time of the input frame it came from
+    sync.status() -> dict                      # pipeline_ms, chain_ms, delay_ms, monitor stats, last test
+    sync.start_test()                          # beep + flash test (also measures and saves the camera chain)
+    sync.close()
+
+Sync test: a full-screen window flashes and beeps at every flash (own process). The camera sees the flash, the mic hears
+the beep. Input arrival vs undelayed mic -> camera chain (saved, applied from then on); played video vs delayed audio ->
+the remaining A/V offset, plus a clip in ~/Videos/ai-livestream-tests/av-sync-test.mp4. Unattended version with a virtual
+camera + mic: tools/av_sync_selftest.sh.
 """
 
+import bisect
 import collections
 import json
 import subprocess
 import sys
 import threading
 import time
+import wave
 from pathlib import Path
 
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-CAL_FILE = REPO / ".tmp" / "camera_latency.json"
-SR, BLOCK = 48000, 480  # 10 ms blocks
-PLAY_LATENCY_MS = 30    # pacat --latency-msec
-CHAIN_FILE = REPO / ".tmp" / "av_chain.json"
+TMP = REPO / ".tmp"
+CHAIN_FILE = TMP / "av_chain.json"
+CLIP = Path.home() / "Videos" / "ai-livestream-tests" / "av-sync-test.mp4"
+SR, BLOCK = 48000, 480   # 10 ms audio blocks
+PLAY_LATENCY_MS = 30     # pacat --latency-msec
+TEST_S = 15
 
 
-def load_chain():
-    """{input kind: {"ms": video arrives this much after its sound, ...}} from the A/V sync tests."""
-    try:
-        return json.loads(CHAIN_FILE.read_text())
-    except (OSError, ValueError):
-        return {}
-
-
-def save_chain(kind, ms, source, score):
-    d = load_chain()
-    d[kind] = {"ms": round(ms), "source": source, "score": round(score, 3), "measured": time.strftime("%Y-%m-%d %H:%M:%S")}
-    CHAIN_FILE.parent.mkdir(exist_ok=True)
-    CHAIN_FILE.write_text(json.dumps(d))
-
+# ---------------------------------------------------------------- delayed mic monitor
 
 class AudioMonitor:
+    """Mic (PulseAudio source via ffmpeg) -> delay line -> pacat (default output). get_delay_ms() is polled every
+    10 ms block: too little delay plays silence while the buffer grows, too much drops the oldest blocks (+-10 ms)."""
+
     def __init__(self, source, get_delay_ms):
         self.source, self.get_delay_ms = source, get_delay_ms
         self.stop = threading.Event()
         self.stats = {"delay_ms": None, "dropped": 0, "inserted": 0}
-        self.mute = False    # sync test: keep timing, play silence (no speaker -> mic feedback loop)
-        self.record = None   # sync test: list -> (write time, block) of what is played
-        self.record_in = None  # sync test: list -> (capture time, block) as captured (undelayed)
+        self.mute = False       # sync test: keep timing, play silence (no speaker -> mic feedback loop)
+        self.record = None      # sync test: list -> (write time, block) of what is played
+        self.record_in = None   # sync test: list -> (capture time, block) as captured (undelayed)
 
     def start(self):
         self.cap = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-f", "pulse", "-fragment_size", "1920", "-i",
                                      self.source, "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"],
                                     stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
         self.play = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1",
-                                      f"--latency-msec={PLAY_LATENCY_MS}", "--stream-name=bridge-monitor"], stdin=subprocess.PIPE)
+                                      f"--latency-msec={PLAY_LATENCY_MS}", "--stream-name=bridge-monitor"],
+                                     stdin=subprocess.PIPE)
         threading.Thread(target=self._run, daemon=True).start()
         return self
 
@@ -71,23 +79,24 @@ class AudioMonitor:
             if self.record_in is not None:
                 self.record_in.append((time.time(), b))
             target = self.get_delay_ms()
-            if target is None:
-                continue  # until the first latency measurement: keep buffering, play nothing
+            if target is None:  # until the first pipeline measurement: play nothing, keep the last 3 s
+                while len(buf) > 300:
+                    buf.popleft()
+                continue
             target_blocks = max(1, int(target / 10))
             self.stats["delay_ms"] = round(target)
             if len(buf) < target_blocks - 1:      # too little delay: play 10 ms of silence, let the buffer grow
-                out = [silence]
+                out = silence
                 self.stats["inserted"] += 1
             else:
                 while len(buf) > target_blocks + 1:   # too much: drop the oldest 10 ms
                     buf.popleft()
                     self.stats["dropped"] += 1
-                out = [buf.popleft()]
+                out = buf.popleft()
             try:
-                for o in out:
-                    if self.record is not None:
-                        self.record.append((time.time(), o))
-                    self.play.stdin.write(silence if self.mute else o)
+                if self.record is not None:
+                    self.record.append((time.time(), out))
+                self.play.stdin.write(silence if self.mute else out)
             except (BrokenPipeError, ValueError):
                 return
 
@@ -98,96 +107,40 @@ class AudioMonitor:
                 p.kill()
 
 
-def load_camera_latency():
+# ---------------------------------------------------------------- camera chain store
+
+def load_chain():
+    """{input kind: {"ms": video arrives this much after its sound, ...}} from the sync tests."""
     try:
-        return json.loads(CAL_FILE.read_text())
+        return json.loads(CHAIN_FILE.read_text())
     except (OSError, ValueError):
-        return None
+        return {}
 
 
-def save_camera_latency(ms, source, score):
-    CAL_FILE.parent.mkdir(exist_ok=True)
-    d = {"ms": round(ms), "source": source, "score": round(score, 3), "measured": time.strftime("%Y-%m-%d %H:%M:%S")}
-    CAL_FILE.write_text(json.dumps(d))
-    return d
+def save_chain(kind, ms, source, score):
+    d = load_chain()
+    d[kind] = {"ms": round(ms), "source": source, "score": round(score, 3), "measured": time.strftime("%Y-%m-%d %H:%M:%S")}
+    TMP.mkdir(exist_ok=True)
+    CHAIN_FILE.write_text(json.dumps(d))
 
 
-def start_blink(seconds, log_path, beep=False):
-    return subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "blink", str(seconds), str(log_path)]
-                            + (["beep"] if beep else []))
-
-
-def analyze(samples, log_path, max_lag_ms=1500):
-    """samples: [(arrival time, mean brightness)]; the blink log: lines 'time level'. -> (lag ms, correlation)."""
-    flips = [tuple(map(float, ln.split())) for ln in Path(log_path).read_text().split("\n") if ln.strip()]
-    if len(flips) < 4 or len(samples) < 30:
-        return None, 0.0
-    t = np.array([s[0] for s in samples]); b = np.array([s[1] for s in samples], np.float64)
-    b = (b - b.mean()) / (b.std() + 1e-6)
-    ft = np.array([f[0] for f in flips]); fl = np.array([f[1] for f in flips])
-
-    def level(ts):
-        i = np.searchsorted(ft, ts, side="right") - 1
-        out = np.where(i >= 0, fl[np.clip(i, 0, len(fl) - 1)], np.nan)
-        return out
-    best = (None, -1.0)
-    for lag in range(0, max_lag_ms + 1, 5):
-        s = level(t - lag / 1000)
-        ok = ~np.isnan(s)
-        if ok.sum() < 20 or np.std(s[ok]) == 0:
-            continue
-        c = float(np.corrcoef(b[ok], s[ok])[0, 1])
-        if c > best[1]:
-            best = (lag, c)
-    return best
-
-
-def _blink(seconds, log_path, beep=False):
-    import cv2
-    pa = None
-    if beep:  # 120 ms 1 kHz beep on the default output at every switch to white
-        pa = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1", "--latency-msec=20",
-                               "--stream-name=sync-test-beep"], stdin=subprocess.PIPE)
-        tt = np.arange(int(0.12 * SR)) / SR
-        tone = (0.6 * 32767 * np.sin(2 * np.pi * 1000 * tt) * np.minimum(1, np.minimum(tt, 0.12 - tt) / 0.005)).astype(np.int16).tobytes()
-    w = "Point the camera at this window (latency test)"
-    cv2.namedWindow(w, cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty(w, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    black = np.zeros((720, 1280, 3), np.uint8); white = np.full((720, 1280, 3), 255, np.uint8)
-    rng = np.random.default_rng(1)
-    t_end = time.time() + float(seconds)
-    level = 0
-    with open(log_path, "w") as f:
-        while time.time() < t_end:
-            level = 1 - level
-            cv2.imshow(w, white if level else black)
-            cv2.waitKey(1)
-            if pa is not None and level:
-                pa.stdin.write(tone); pa.stdin.flush()
-            f.write(f"{time.time():.4f} {level}\n"); f.flush()
-            hold = 0.25 + 0.5 * rng.random()  # irregular intervals: one unambiguous best lag
-            t_next = time.time() + hold
-            while time.time() < t_next:
-                cv2.waitKey(5)
-    cv2.destroyAllWindows()
-
+# ---------------------------------------------------------------- analysis
 
 def sync_offset(frames, audio, pa_latency_ms=PLAY_LATENCY_MS, max_ms=600):
-    """frames: [(play time, mean brightness)], audio: [(write time, s16 block)] -> (audio minus video ms, score).
-    Video onsets = rises in brightness, audio onsets = beep energy; positive = audio LATE."""
+    """frames: [(time, mean brightness)], audio: [(time, s16 block)] -> (audio minus video ms, match score).
+    Onsets = brightness rises vs beep energy rises, smoothed 40 ms; positive = audio LATE. Accurate to ~10-15 ms."""
     if len(frames) < 50 or len(audio) < 100:
         return None, 0.0
     t0 = max(frames[0][0], audio[0][0]); t1 = min(frames[-1][0], audio[-1][0])
     grid = np.arange(t0, t1, 0.005)
     ft = np.array([f[0] for f in frames]); fb = np.array([f[1] for f in frames])
     vb = fb[np.clip(np.searchsorted(ft, grid, side="right") - 1, 0, len(fb) - 1)]
-    v = np.maximum(0, np.diff(vb, prepend=vb[0]))
     at = np.array([a[0] for a in audio]) + pa_latency_ms / 1000
     ae = np.array([np.abs(np.frombuffer(a[1], np.int16)).mean() for a in audio], np.float64)
     ag = ae[np.clip(np.searchsorted(at, grid, side="right") - 1, 0, len(ae) - 1)]
-    a = np.maximum(0, np.diff(ag, prepend=ag[0]))
-    box = np.ones(8) / 8  # 40 ms: onsets quantized to frames (40 ms) and blocks (10 ms) still overlap
-    v, a = np.convolve(v, box, "same"), np.convolve(a, box, "same")
+    box = np.ones(8) / 8
+    v = np.convolve(np.maximum(0, np.diff(vb, prepend=vb[0])), box, "same")
+    a = np.convolve(np.maximum(0, np.diff(ag, prepend=ag[0])), box, "same")
     best = (None, -1.0)
     for lag in range(-max_ms, max_ms + 1, 5):
         k = lag // 5
@@ -200,5 +153,162 @@ def sync_offset(frames, audio, pa_latency_ms=PLAY_LATENCY_MS, max_ms=600):
     return best
 
 
+def _brightness(frame):
+    return float(frame[::16, ::16].mean())
+
+
+# ---------------------------------------------------------------- the pipeline-facing object
+
+class AVSync:
+    def __init__(self, input_kind, input_name, monitor_source=None, adjust_ms=0.0, log=print, window_frames=125):
+        self.kind, self.name, self.adjust_ms, self.log = input_kind, input_name, adjust_ms, log
+        self.lat = collections.deque(maxlen=window_frames)   # ms, input arrival -> played
+        self.chain_ms = load_chain().get(input_kind, {}).get("ms", 0)
+        self.test = {"running": False}
+        self._arrivals = None    # test: (t, brightness) at input arrival
+        self._played = None      # test: (t, brightness, small frame) at playout
+        self.monitor = AudioMonitor(monitor_source, self.delay_ms).start() if monitor_source else None
+        if self.monitor:
+            self.log(f"audio monitor: {monitor_source} -> default output, delayed by camera chain {self.chain_ms} ms "
+                     "(last sync test) + the live pipeline latency (use headphones)")
+
+    # hooks
+    def on_input(self, t_arrival, frame):
+        if self._arrivals is not None:
+            self._arrivals.append((t_arrival, _brightness(frame)))
+
+    def on_played(self, t_arrival, frame):
+        now = time.time()
+        self.lat.append((now - t_arrival) * 1000)
+        if self._played is not None and frame is not None:
+            import cv2
+            h, w = frame.shape[:2]
+            self._played.append((now, _brightness(frame), cv2.resize(frame, (240, round(240 * h / w / 2) * 2))))
+
+    # numbers
+    def pipeline_ms(self):
+        l = sorted(self.lat)
+        return l[len(l) // 2] if l else None
+
+    def delay_ms(self):
+        p = self.pipeline_ms()
+        return None if p is None else max(0.0, p + self.chain_ms - PLAY_LATENCY_MS + self.adjust_ms)
+
+    def status(self):
+        p, d = self.pipeline_ms(), self.delay_ms()
+        return {"pipeline_ms": None if p is None else round(p), "chain_ms": self.chain_ms,
+                "delay_ms": None if d is None else round(d),
+                "monitor": dict(self.monitor.stats) if self.monitor else None, "test": dict(self.test)}
+
+    # sync test
+    def start_test(self, window=True, after_s=0.0):
+        if self.test.get("running"):
+            return
+        threading.Thread(target=self._run_test, args=(window, after_s), daemon=True).start()
+
+    def _run_test(self, window, after_s):
+        time.sleep(after_s)
+        if self.monitor is None:
+            self.log("sync test needs the audio monitor (--audio-monitor)")
+            return
+        self.test = {"running": True}
+        self.log(f"A/V sync test ({TEST_S} s): point the camera at the flashing window; beeps on the SPEAKERS "
+                 "(not headphones) so the mic hears them")
+        m = self.monitor
+        m.mute, m.record, m.record_in, self._arrivals, self._played = True, [], [], [], []
+        if window:
+            log = TMP / "blink_log.txt"
+            TMP.mkdir(exist_ok=True)
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "blink", str(TEST_S), str(log)]).wait()
+        else:  # the input itself carries flashes + beeps (tools/av_sync_selftest.sh)
+            time.sleep(TEST_S)
+        time.sleep(((self.pipeline_ms() or 1000) + 500) / 1000)   # let the last flashes come through
+        played, audio, audio_in, arrivals = self._played, m.record, m.record_in, self._arrivals
+        self._played, m.record, m.record_in, self._arrivals, m.mute = None, None, None, None, False
+
+        chain, c_chain = sync_offset(arrivals, audio_in, pa_latency_ms=0)
+        if chain is not None and c_chain > 0.5:
+            self.chain_ms = -chain
+            save_chain(self.kind, -chain, self.name, c_chain)
+        off, c = sync_offset([(t, b) for t, b, _ in played], audio)
+        res = {"running": False, "offset_ms": off, "match": round(c, 2), "chain_ms": self.chain_ms,
+               "chain_match": round(c_chain, 2), "pipeline_ms": round(self.pipeline_ms() or 0),
+               "delay_ms": m.stats["delay_ms"]}
+        if off is None or c < 0.3:
+            msg = f"sync test inconclusive (match {c:.2f}): flash filling the camera view? beeps audible to the mic?"
+        elif abs(off) > 30:  # below ~30 ms: within the test resolution and below perception
+            msg = (f"audio was {abs(off)} ms {'LATE' if off > 0 else 'EARLY'} (match {c:.2f}); camera chain "
+                   f"{self.chain_ms} ms now applied automatically and saved; run the test again to verify")
+        else:
+            msg = f"A/V in sync: audio {off:+d} ms (match {c:.2f}); camera chain {self.chain_ms} ms"
+        res["msg"] = msg
+        self.test = res
+        self.log(msg)
+        try:
+            res["clip"] = str(self._write_clip(played, audio))
+            self.log(f"sync test clip: {res['clip']}")
+        except Exception as e:  # noqa: BLE001
+            self.log(f"sync test clip failed: {e}")
+
+    @staticmethod
+    def _write_clip(played, audio):
+        """Played frames + the delayed audio on one timeline (what you'd see and hear), 25 fps mp4."""
+        CLIP.parent.mkdir(parents=True, exist_ok=True)
+        t0 = max(played[0][0], audio[0][0]); t1 = min(played[-1][0], audio[-1][0])
+        pcm = np.zeros(int((t1 - t0) * SR) + SR, np.int16)
+        for t, b in audio:
+            i, x = int((t + PLAY_LATENCY_MS / 1000 - t0) * SR), np.frombuffer(b, np.int16)
+            if 0 <= i < len(pcm) - len(x):
+                pcm[i:i + len(x)] = x
+        TMP.mkdir(exist_ok=True)
+        wav = TMP / "synctest.wav"
+        with wave.open(str(wav), "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR); w.writeframes(pcm.tobytes())
+        h, w_ = played[0][2].shape[:2]
+        p = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w_}x{h}",
+                              "-r", "25", "-i", "-", "-i", str(wav), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                              "-profile:v", "high", "-level", "4.1", "-c:a", "aac", "-shortest", "-movflags",
+                              "+faststart", str(CLIP)], stdin=subprocess.PIPE)
+        ft = [f[0] for f in played]
+        for k in range(int((t1 - t0) * 25)):
+            p.stdin.write(played[max(0, bisect.bisect_right(ft, t0 + k / 25) - 1)][2].tobytes())
+        p.stdin.close(); p.wait()
+        return CLIP
+
+    def close(self):
+        if self.monitor:
+            self.monitor.close()
+
+
+# ---------------------------------------------------------------- flashing + beeping window (own process)
+
+def _blink(seconds, log_path):
+    import cv2
+    pa = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1", "--latency-msec=20",
+                           "--stream-name=sync-test-beep"], stdin=subprocess.PIPE)
+    tt = np.arange(int(0.12 * SR)) / SR   # 120 ms 1 kHz beep at every switch to white
+    tone = (0.6 * 32767 * np.sin(2 * np.pi * 1000 * tt) * np.minimum(1, np.minimum(tt, 0.12 - tt) / 0.005)
+            ).astype(np.int16).tobytes()
+    w = "A/V sync test: point the camera at this window"
+    cv2.namedWindow(w, cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(w, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    black = np.zeros((720, 1280, 3), np.uint8); white = np.full((720, 1280, 3), 255, np.uint8)
+    rng = np.random.default_rng(1)
+    t_end, level = time.time() + float(seconds), 0
+    with open(log_path, "w") as f:
+        while time.time() < t_end:
+            level = 1 - level
+            cv2.imshow(w, white if level else black)
+            cv2.waitKey(1)
+            if level:
+                pa.stdin.write(tone); pa.stdin.flush()
+            f.write(f"{time.time():.4f} {level}\n"); f.flush()
+            t_next = time.time() + 0.25 + 0.5 * rng.random()  # irregular: one unambiguous best lag
+            while time.time() < t_next:
+                cv2.waitKey(5)
+    cv2.destroyAllWindows()
+    pa.kill()
+
+
 if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "blink":
-    _blink(sys.argv[2], sys.argv[3], beep=len(sys.argv) > 4 and sys.argv[4] == "beep")
+    _blink(sys.argv[2], sys.argv[3])

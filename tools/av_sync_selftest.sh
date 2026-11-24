@@ -44,9 +44,9 @@ M1=$(pactl load-module module-null-sink sink_name=avsync_in sink_properties=devi
 M2=$(pactl load-module module-null-sink sink_name=avsync_out sink_properties=device.description=avsync_out)
 cleanup(){ [ -n "${SND:-}" ] && kill $SND 2>/dev/null; pactl unload-module $M1; pactl unload-module $M2; }
 trap cleanup EXIT
-PULSE_SINK=avsync_out timeout 100 $PY cloud/client/live_bridge.py --url "$URL" --input "srt://0.0.0.0:$PORT" \
+PULSE_SINK=avsync_out timeout 110 $PY cloud/client/live_bridge.py --url "$URL" --input "srt://0.0.0.0:$PORT" \
   --output $T/played.mp4 --portrait --ref assets/char_face.png --prompt "$(cat cloud/pipelines/joyai/prompts/gstar.txt)" \
-  --facefix-preset gstar --audio-monitor --monitor-source avsync_in.monitor --synctest-auto 25 --seconds 50 \
+  --facefix-preset gstar --audio-monitor --monitor-source avsync_in.monitor --synctest-auto 25 --seconds 60 \
   --no-reconnect > $T/bridge.log 2>&1 &
 BR=$!
 sleep 8

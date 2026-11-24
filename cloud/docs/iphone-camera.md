@@ -40,3 +40,9 @@ but adds ~1 s; RTSP/UDP URLs are also accepted.
 The pipeline runs at the input's fresh-frame rate (the bridge sends the newest frame, up to `--fps 26`). The dashboard
 warns when the input is slower than that. Phone: keep Larix at 30 fps and enough light (iOS lowers the camera's frame
 rate in the dark too). Webcam: the bridge locks `exposure_dynamic_framerate=0` on start (`--no-camera-fix` to skip).
+
+## Audio sync (voice monitor)
+`--audio-monitor` plays your mic (headphones) delayed by camera chain + live pipeline latency; the dashboard's
+**A/V sync test** (beep + flash, speakers) measures and saves the camera chain per input kind. The logic is model-agnostic
+(`cloud/client/av_sync.py`, class `AVSync`: `on_input` / `on_played` / `status` / `start_test`), so other edit
+pipelines reuse it. Unattended check: `tools/av_sync_selftest.sh` (2026-11-24: -10 / 0 / -25 ms over 3 conclusive runs).

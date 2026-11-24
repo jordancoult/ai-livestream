@@ -207,10 +207,10 @@ async function poll(){try{S=await (await fetch('/status')).json();}catch(e){docu
  document.getElementById('status').textContent=
   `session   ${S.width}x${S.height}  ${S.state}\n${S.input_live?('input     '+(S.input_fps??'-')+' fps from the camera/phone'+((S.input_fps!=null&&S.input_fps<S.fps-3)?'   ⚠ slower than the send rate ('+S.fps+'): the whole pipeline runs at the input rate (more light, or start the bridge with --camera-exposure 30)':'')+'\n'):''}ref       ${S.ref||'none'}\nserver    ${S.server_fps} fps received\nplayout   ${S.play_fps} fps  queue ${S.queue}  played ${S.played}  repeated ${S.repeated}  dropped ${S.dropped}\nlatency   glass-to-glass median ${S.g2g_ms} ms\nface pass ${S.facefix_available?(S.facefix_on?'on':'off')+'  hit '+S.facefix_hit+'  render '+S.facefix_ms+' ms':'-'}\nprompt    ${S.prompt.slice(0,160)}${S.prompt.length>160?'...':''}\n${S.last_msg||''}`;}
 document.getElementById('synctest').onclick=()=>send({synctest:true});
-function latencyUI(){ if(!S) return; const am=S.audio_monitor;
- document.getElementById('latency').textContent=`pipeline  ${S.pipeline_ms??'-'} ms live (input arrives -> played) + camera chain ${S.chain_ms??0} ms (last sync test)`+
-  
-  (S.synctest&&S.synctest.running?'\n⏳ sync test running: camera on the flashing window, beeps on the speakers':'')+(S.synctest&&S.synctest.msg?'\nsync test '+S.synctest.msg:'')+(am?`\naudio     monitor delayed ${am.delay_ms??'-'} ms (adjustments: -${am.dropped} / +${am.inserted} x10 ms)`:''); }
+function latencyUI(){ if(!S||!S.sync) return; const y=S.sync, am=y.monitor, t=y.test||{};
+ document.getElementById('latency').textContent=`latency   pipeline ${y.pipeline_ms??'-'} ms (live) + camera chain ${y.chain_ms} ms (last sync test)`+
+  (am?`\naudio     delayed ${am.delay_ms??'-'} ms (adjustments -${am.dropped} / +${am.inserted} x10 ms)`:'\naudio     monitor off (start with --audio-monitor)')+
+  (t.running?'\n⏳ sync test: camera on the flashing window, beeps on the speakers':'')+(t.msg?'\nsync test '+t.msg:''); }
 setInterval(latencyUI, 1000);
 const GATES={score:['g_score0','g_score1'],cover:['g_cover0','g_cover1'],drv_yaw:['g_yaw0','g_yaw1'],drv_pitch:['g_pitch0','g_pitch1']};
 for(const [k,[a,b]] of Object.entries(GATES)) for(const id of [a,b]) document.getElementById(id).onchange=()=>send({gate:{[k]:[+document.getElementById(a).value,+document.getElementById(b).value]}});

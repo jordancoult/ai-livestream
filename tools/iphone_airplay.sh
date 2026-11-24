@@ -7,6 +7,9 @@
 #      HOTSPOT=1 tools/iphone_airplay.sh  (direct laptop hotspot "UxPlay_Direct", lowest latency; asks for sudo; based on
 #                                          ~/personal/phone-stream/hotspot-screen-mirror.sh)
 #   3. iPhone: Control Center -> Screen Mirroring -> "JoyAI-Cam"; open the camera app full screen (portrait)
+#   PHONE_AUDIO=1 tools/iphone_airplay.sh  the phone's own sound (a TikTok live, a video...) goes to a private virtual
+#      sink "airplay_audio" instead of the speakers; start the bridge with --audio-monitor --monitor-source airplay so
+#      it plays in sync with the processed picture (default: UxPlay plays it on the speakers, undelayed)
 # Env: FPS (30), BITRATE kbit/s (8000), SRT_PORT (9000), ROTATE (empty = as mirrored [default]; R or L = rotate 90 deg, for a phone held in landscape)
 FPS=${FPS:-30}; BITRATE=${BITRATE:-8000}; SRT_PORT=${SRT_PORT:-9000}; ROTATE=${ROTATE-}
 if [ "${HOTSPOT:-0}" = 1 ]; then
@@ -17,4 +20,11 @@ if [ "${HOTSPOT:-0}" = 1 ]; then
 fi
 SINK="nvh264enc preset=low-latency-hq zerolatency=true bitrate=$BITRATE gop-size=$FPS ! h264parse config-interval=-1 ! mpegtsmux ! srtsink uri=srt://127.0.0.1:$SRT_PORT?mode=caller&latency=20 wait-for-connection=false"
 echo "UxPlay -> SRT 127.0.0.1:$SRT_PORT ($FPS fps, $BITRATE kbit/s). Mirror the iPhone to \"JoyAI-Cam\"."
-exec uxplay -n JoyAI-Cam -nh -vsync no -fps "$FPS" -reset 0 ${ROTATE:+-r $ROTATE} -vs "$SINK"
+if [ "${PHONE_AUDIO:-0}" = 1 ]; then
+  pactl list short sinks | grep -q "airplay_audio" || \
+    MOD=$(pactl load-module module-null-sink sink_name=airplay_audio sink_properties=device.description=AirPlay-to-bridge)
+  trap '[ -n "${MOD:-}" ] && pactl unload-module $MOD' EXIT
+  export PULSE_SINK=airplay_audio
+  echo "phone audio -> virtual sink airplay_audio (bridge: --audio-monitor --monitor-source airplay)"
+fi
+uxplay -n JoyAI-Cam -nh -vsync no -fps "$FPS" -reset 0 ${ROTATE:+-r $ROTATE} -vs "$SINK"

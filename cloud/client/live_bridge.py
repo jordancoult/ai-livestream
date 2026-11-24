@@ -54,7 +54,8 @@ p.add_argument("--input-fit", default="crop", choices=["crop", "pad"], help="net
 p.add_argument("--audio-monitor", action="store_true", help="play your mic to the default output (HEADPHONES), delayed "
                "by camera chain (A/V sync test, saved) + pipeline latency (measured continuously), so the output window "
                "and your voice are in sync")
-p.add_argument("--monitor-source", default="default", help="--audio-monitor mic (PulseAudio source; pactl list short sources)")
+p.add_argument("--monitor-source", default="default", help="--audio-monitor audio: PulseAudio source (pactl list short "
+               "sources; default = laptop mic) or 'airplay' = the phone's own sound via tools/iphone_airplay.sh PHONE_AUDIO=1")
 p.add_argument("--monitor-offset-ms", type=float, default=0, help="--audio-monitor: manual adjustment added to the "
                "automatic delay (+ = audio later); normally 0: run the A/V sync test instead")
 p.add_argument("--synctest-auto", type=float, default=None, help="(testing) start the A/V sync test N s after the start "
@@ -577,6 +578,8 @@ async def main():
     stats = collections.Counter()
     lat = []
     from av_sync import AVSync
+    if args.monitor_source == "airplay":
+        args.monitor_source = "airplay_audio.monitor"
     sync = AVSync("net" if src.net else "webcam" if src.live else "file", args.input,
                   monitor_source=args.monitor_source if args.audio_monitor else None, adjust_ms=args.monitor_offset_ms,
                   log=lambda m: print("[bridge] " + m, flush=True))

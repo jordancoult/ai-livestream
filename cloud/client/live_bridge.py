@@ -52,10 +52,11 @@ p.add_argument("--input-rotate", default="none", choices=["none", "cw", "ccw", "
 p.add_argument("--input-fit", default="crop", choices=["crop", "pad"], help="network input whose shape differs from "
                "the session: crop = fill and cut the edges (default), pad = fit whole with black bars")
 p.add_argument("--audio-monitor", action="store_true", help="play your mic to the default output (HEADPHONES), delayed "
-               "by the live total latency (camera chain + bridge), so the preview window and your voice are in sync")
+               "by the pipeline latency measured continuously (input frame arrival -> played), so the output window "
+               "and your voice are in sync")
 p.add_argument("--monitor-source", default="default", help="--audio-monitor mic (PulseAudio source; pactl list short sources)")
 p.add_argument("--monitor-offset-ms", type=float, default=60, help="--audio-monitor: subtracted from the delay for the "
-               "mic capture + playback buffers (~60 ms); raise it if the voice still lags the picture")
+               "mic capture + playback buffers (~60 ms); raise it if the voice lags the picture, lower it if it leads")
 p.add_argument("--camera-latency-ms", type=float, default=None, help="camera -> bridge delay to add for the total "
                "latency (default: the last measurement in .tmp/camera_latency.json; measure with --measure-camera-latency, "
                "/measure or the dashboard button)")
@@ -579,6 +580,12 @@ async def main():
            "cam_src": "--camera-latency-ms" if args.camera_latency_ms is not None else
            (f"measured {cal['measured']} ({cal['source']})" if cal else None), "measuring": False}
 
+    def pipeline_ms():
+        """bridge frame arrival -> played, live median of the last ~5 s (what the audio must be delayed by: the
+        camera's own delay is already in the audio, which arrives in sync with the camera picture)."""
+        l = sorted(lat[-125:])
+        return l[len(l) // 2] if l else None
+
     def total_ms():
         """camera -> bridge (measured once) + bridge capture -> played (live median of the last ~10 s)."""
         l = sorted(lat[-250:])
@@ -609,9 +616,9 @@ async def main():
     monitor = None
     if args.audio_monitor:
         monitor = av_sync.AudioMonitor(args.monitor_source, lambda: (lambda t: None if t is None else
-                                                                  max(0, t - args.monitor_offset_ms))(total_ms())).start()
-        print(f"[bridge] audio monitor: {args.monitor_source} -> default output, delayed by the total latency "
-              "(use headphones)", flush=True)
+                                                                  max(0, t - args.monitor_offset_ms))(pipeline_ms())).start()
+        print(f"[bridge] audio monitor: {args.monitor_source} -> default output, delayed by the live pipeline latency "
+              "(measured continuously; use headphones)", flush=True)
     if args.measure_camera_latency:
         threading.Thread(target=measure_camera, daemon=True).start()
     stop = asyncio.Event()
@@ -753,6 +760,7 @@ async def main():
                       "input_live": src.live, "camera_ms": avs["cam_ms"], "camera_ms_source": avs["cam_src"],
                       "measuring": avs["measuring"],
                       "total_ms": round(total_ms()) if total_ms() is not None else None,
+                      "pipeline_ms": round(pipeline_ms()) if pipeline_ms() is not None else None,
                       "audio_monitor": dict(monitor.stats) if monitor else None}
                 if ff is not None:
                     ms = sorted(ff.ms)

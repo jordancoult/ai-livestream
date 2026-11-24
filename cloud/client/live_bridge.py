@@ -171,7 +171,7 @@ class Source:
         self.stamps = collections.deque(maxlen=90)
         if self.net:
             self.latest, self.n, self.n_read, self.proc = None, 0, 0, None
-            self.pending = collections.deque(maxlen=2)
+            self.pending = collections.deque(maxlen=12)  # (arrival time, frame)
             self.cv = threading.Condition()
             threading.Thread(target=self._grab_net, daemon=True).start()
             import atexit
@@ -190,7 +190,7 @@ class Source:
             # So a thread drains the camera continuously and read() returns the newest frame (even skipping).
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             self.latest, self.n, self.n_read = None, 0, 0
-            self.pending = collections.deque(maxlen=2)
+            self.pending = collections.deque(maxlen=12)  # (arrival time, frame)
             self.cv = threading.Condition()
             threading.Thread(target=self._grab, daemon=True).start()
 
@@ -242,7 +242,7 @@ class Source:
                 self.stamps.append(time.time())
                 with self.cv:
                     self.latest, self.n = f, self.n + 1
-                    self.pending.append(f)
+                    self.pending.append((time.time(), f))
                     self.cv.notify_all()
             self.proc.kill()
             print(f"[bridge] stream ended after {got} frames; waiting again", flush=True)
@@ -304,18 +304,22 @@ class Source:
             self.stamps.append(time.time())
             with self.cv:
                 self.latest, self.n = f, self.n + 1
-                self.pending.append(f)
+                self.pending.append((time.time(), f))
                 self.cv.notify_all()
 
     def read(self):
         if self.live:
-            with self.cv:  # oldest unsent of the last 2 frames: bursty sources (AirPlay delivers frame pairs) keep
-                # their full rate (newest-only sent every other frame: 26 fps in -> 13 to JoyAI); at most +1 frame lag
+            with self.cv:  # oldest unsent frame not older than 120 ms: bursty sources (AirPlay hands over 2-4+ frames
+                # at once) keep their full rate (newest-only: 26-30 fps in -> 13 to JoyAI = 0.3 s on / 0.3 s off), while
+                # stale frames are dropped so the added delay stays <= ~0.12 s
                 self.cv.wait_for(lambda: len(self.pending) > 0, timeout=0.1)
                 if not self.pending:
                     return None
+                now = time.time()
+                while len(self.pending) > 1 and now - self.pending[0][0] > 0.12:
+                    self.pending.popleft()
                 self.n_read = self.n
-                return self.pending.popleft()
+                return self.pending.popleft()[1]
         want = int((time.time() - self.t0) * self.src_fps)  # real-time pacing for files
         f = None
         while self.i <= want:

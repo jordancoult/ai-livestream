@@ -43,6 +43,10 @@ p.add_argument("--input", default="/dev/video0", help="v4l2 device, a video file
                "(prompts you to paste a URL at start) "
                "(downloaded once to cloud/client/.cache; played in real time, looped)")
 p.add_argument("--input-size", default="1280x720", help="capture size for v4l2 devices")
+p.add_argument("--camera-exposure", default="auto", help="v4l2 webcam exposure: auto (camera decides; in low light "
+               "it can stretch frames past 33 ms and drop to ~15 fps, which caps the whole pipeline) or a fixed exposure "
+               "in ms, e.g. 30 (keeps 30 fps; darker, so gain is raised with --camera-gain)")
+p.add_argument("--camera-gain", type=int, default=None, help="v4l2 gain with a fixed exposure (default: camera's max/2+)")
 p.add_argument("--no-camera-fix", action="store_true", help="don't lock the v4l2 camera's frame rate (by default the "
                "bridge sets exposure_dynamic_framerate=0 so a webcam keeps 30 fps in dim light instead of dropping to "
                "~15-17, which caps the whole pipeline's fps)")
@@ -236,6 +240,15 @@ class Source:
                                text=True, timeout=5)
             if r.returncode == 0:
                 print(f"[bridge] {dev}: frame rate locked (exposure_dynamic_framerate=0)", flush=True)
+            if args.camera_exposure == "auto":
+                subprocess.run(["v4l2-ctl", "-d", dev, "-c", "auto_exposure=3"], capture_output=True, timeout=5)
+            else:  # manual exposure (0.1 ms units) short enough for 30 fps, plus gain to make up the light
+                ms = float(args.camera_exposure)
+                gain = args.camera_gain if args.camera_gain is not None else 100
+                r = subprocess.run(["v4l2-ctl", "-d", dev, "-c", f"auto_exposure=1,exposure_time_absolute={int(ms * 10)}",
+                                    "-c", f"gain={gain}"], capture_output=True, text=True, timeout=5)
+                print(f"[bridge] {dev}: fixed exposure {ms:g} ms, gain {gain}"
+                      + (f" (failed: {r.stderr.strip()[:80]})" if r.returncode else ""), flush=True)
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
@@ -887,7 +900,9 @@ async def main():
                                   (f" render {ms[len(ms) // 2]:.0f} ms" if ms else ""))
                         print(f"[bridge] played {stats['played']} repeated {stats['repeated']} dropped {stats['dropped']} "
                               f"queue {len(queue)} glass-to-glass median {l[len(l) // 2]:.0f} ms{fx}"
-                              + (f" input {src.fps()} fps" if src.live else "") if l else "",
+                              + (f" input {src.fps()} fps" if src.live else "")
+                              + (" (camera slower than the send rate: low light? try --camera-exposure 30)"
+                                 if src.live and src.fps() and src.fps() < args.fps - 3 else "") if l else "",
                               flush=True)
 
             try:

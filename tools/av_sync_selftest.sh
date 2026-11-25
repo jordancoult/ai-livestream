@@ -3,7 +3,7 @@
 # A clip with flashes + a beep at every flash is streamed as the "phone" (SRT) while its audio plays into a virtual
 # PulseAudio sink that stands in for the mic; the bridge delays that audio by its live pipeline latency and measures
 # how far the delayed beeps are from the flashes in the played video (+ writes ~/Videos/ai-livestream-tests/av-sync-test.mp4).
-#   tools/av_sync_selftest.sh [joyai ws url]      (JoyAI tunnel up, no other bridge session)
+#   tools/av_sync_selftest.sh [joyai ws url]      (JoyAI tunnel up, no other bridge session; VOICE=rvc: through the voice stage)
 set -u
 cd "$(dirname "$0")/.."
 URL=${1:-ws://127.0.0.1:18080/ws}; PORT=9020; T=.tmp/avsync; mkdir -p $T
@@ -46,10 +46,11 @@ cleanup(){ [ -n "${SND:-}" ] && kill $SND 2>/dev/null; pactl unload-module $M1; 
 trap cleanup EXIT
 PULSE_SINK=avsync_out timeout 110 $PY cloud/client/live_bridge.py --url "$URL" --input "srt://0.0.0.0:$PORT" \
   --output $T/played.mp4 --portrait --ref assets/char_face.png --prompt "$(cat cloud/pipelines/joyai/prompts/gstar.txt)" \
-  --facefix-preset gstar --audio-monitor --monitor-source avsync_in.monitor --synctest-auto 25 --seconds 60 \
+  --facefix-preset gstar --audio-monitor --monitor-source avsync_in.monitor --synctest-auto 25 --seconds 60 ${VOICE:+--voice $VOICE --voice-pitch 0} \
   --no-reconnect > $T/bridge.log 2>&1 &
 BR=$!
-sleep 8
+for i in $(seq 1 90); do grep -q "audio monitor\|Traceback" $T/bridge.log && break; kill -0 $BR 2>/dev/null || break; sleep 1; done
+sleep 5
 timeout 70 ffmpeg -v error -re -i $T/av.mp4 -map 0:v -c:v libx264 -preset veryfast -tune zerolatency -g 30 -b:v 5M \
   -f mpegts "srt://127.0.0.1:$PORT?mode=caller&latency=20" -map 0:a -f pulse -device avsync_in avsync > $T/sender.log 2>&1 &
 SND=$!

@@ -7,7 +7,8 @@ The picture comes back through a pipeline with a varying delay; your voice (the 
           + pipeline     (input frame arrived -> its output frame played; measured continuously, median of ~5 s)
           - the monitor's playback buffer + a manual adjust (normally 0)
 
-and plays it to the default output (headphones), following the live pipeline delay in 10 ms steps.
+and plays it to the default output (headphones), following the live pipeline delay in 10 ms steps. An optional voice
+stage (voice_stage.py, e.g. RVC) converts the voice inside that delay: its own delay is counted, not added.
 
 Any pipeline integrates it with these calls (live_bridge.py is the reference):
 
@@ -16,6 +17,7 @@ Any pipeline integrates it with these calls (live_bridge.py is the reference):
     sync.on_played(t_arrival, frame)           # at playout, with the ARRIVAL time of the input frame it came from
     sync.status() -> dict                      # pipeline_ms, chain_ms, delay_ms, monitor stats, last test
     sync.start_test()                          # beep + flash test (also measures and saves the camera chain)
+    sync.record_av(path)                       # optional: played video + heard audio -> mp4 at close()
     sync.close()
 
 Sync test: a full-screen window flashes and beeps at every flash (own process). The camera sees the flash, the mic hears
@@ -51,13 +53,14 @@ class AudioMonitor:
     """Mic (PulseAudio source via ffmpeg) -> delay line -> pacat (default output). get_delay_ms() is polled every
     10 ms block: too little delay plays silence while the buffer grows, too much drops the oldest blocks (+-10 ms)."""
 
-    def __init__(self, source, get_delay_ms):
-        self.source, self.get_delay_ms = source, get_delay_ms
+    def __init__(self, source, get_delay_ms, voice=None):
+        self.source, self.get_delay_ms, self.voice = source, get_delay_ms, voice
         self.stop = threading.Event()
         self.stats = {"delay_ms": None, "dropped": 0, "inserted": 0}
         self.mute = False       # sync test: keep timing, play silence (no speaker -> mic feedback loop)
         self.record = None      # sync test: list -> (write time, block) of what is played
         self.record_in = None   # sync test: list -> (capture time, block) as captured (undelayed)
+        self.record_av = None   # AV recording: list -> (write time, block) of what is played
 
     def start(self):
         self.cap = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-f", "pulse", "-fragment_size", "1920", "-i",
@@ -70,15 +73,28 @@ class AudioMonitor:
         return self
 
     def _run(self):
+        """Delay accounting in 10 ms blocks: queued here + inside the voice stage (if any, incl. its algorithmic
+        delay). The voice stage returns audio in bursts (its block size); counting what is inside it keeps the
+        total exact, so a voice change costs no extra delay while the pipeline is slower than the stage."""
         buf = collections.deque()
         silence = bytes(BLOCK * 2)
+        voice_on = self.voice is not None
         while not self.stop.is_set():
             b = self.cap.stdout.read(BLOCK * 2)
             if len(b) < BLOCK * 2:
                 return
-            buf.append(b)
             if self.record_in is not None:
                 self.record_in.append((time.time(), b))
+            if voice_on and self.voice.failed:   # stage died: continue with the plain mic
+                voice_on = False
+                buf.clear()
+            if voice_on:
+                self.voice.feed(b)
+                buf.extend(self.voice.drain())
+                in_stage = self.voice.pending_blocks()
+            else:
+                buf.append(b)
+                in_stage = 0
             target = self.get_delay_ms()
             if target is None:  # until the first pipeline measurement: play nothing, keep the last 3 s
                 while len(buf) > 300:
@@ -86,17 +102,21 @@ class AudioMonitor:
                 continue
             target_blocks = max(1, int(target / 10))
             self.stats["delay_ms"] = round(target)
-            if len(buf) < target_blocks - 1:      # too little delay: play 10 ms of silence, let the buffer grow
+            have = len(buf) + in_stage
+            if have < target_blocks - 1 or not buf:   # too little delay: 10 ms of silence, let the buffer grow
                 out = silence
                 self.stats["inserted"] += 1
             else:
-                while len(buf) > target_blocks + 1:   # too much: drop the oldest 10 ms
+                while len(buf) > 1 and have > target_blocks + 1:   # too much: drop the oldest 10 ms
                     buf.popleft()
+                    have -= 1
                     self.stats["dropped"] += 1
                 out = buf.popleft()
             try:
                 if self.record is not None:
                     self.record.append((time.time(), out))
+                if self.record_av is not None and not self.mute:
+                    self.record_av.append((time.time(), out))
                 self.play.stdin.write(silence if self.mute else out)
             except (BrokenPipeError, ValueError):
                 return
@@ -106,6 +126,8 @@ class AudioMonitor:
         for p in (getattr(self, "cap", None), getattr(self, "play", None)):
             if p is not None and p.poll() is None:
                 p.kill()
+        if self.voice is not None:
+            self.voice.close()
 
 
 # ---------------------------------------------------------------- camera chain store
@@ -161,17 +183,19 @@ def _brightness(frame):
 # ---------------------------------------------------------------- the pipeline-facing object
 
 class AVSync:
-    def __init__(self, input_kind, input_name, monitor_source=None, adjust_ms=0.0, log=print, window_frames=125):
+    def __init__(self, input_kind, input_name, monitor_source=None, adjust_ms=0.0, log=print, window_frames=125,
+                 voice=None):
         # the camera chain depends on the input AND the audio path (e.g. AirPlay audio already matches its picture, a
         # laptop mic does not): saved per (input, audio source), re-measured by every sync test
         self.kind = f"{input_kind}|{input_name}|{monitor_source or '-'}"
         self.name, self.adjust_ms, self.log = input_name, adjust_ms, log
         self.lat = collections.deque(maxlen=window_frames)   # ms, input arrival -> played
-        self.chain_ms = load_chain().get(input_kind, {}).get("ms", 0)
+        self.chain_ms = load_chain().get(self.kind, {}).get("ms", 0)
         self.test = {"running": False}
         self._arrivals = None    # test: (t, brightness) at input arrival
         self._played = None      # test: (t, brightness, small frame) at playout
-        self.monitor = AudioMonitor(monitor_source, self.delay_ms).start() if monitor_source else None
+        self.monitor = AudioMonitor(monitor_source, self.delay_ms, voice).start() if monitor_source else None
+        self._rec = None         # record_av: [(t, jpeg)] of played frames
         if self.monitor:
             self.log(f"audio monitor: {monitor_source} -> default output, delayed by camera chain {self.chain_ms} ms "
                      "(last sync test) + the live pipeline latency (use headphones)")
@@ -184,6 +208,11 @@ class AVSync:
     def on_played(self, t_arrival, frame):
         now = time.time()
         self.lat.append((now - t_arrival) * 1000)
+        if self._rec is not None and frame is not None and len(self._rec["frames"]) < 25 * 180:
+            import cv2
+            h, w = frame.shape[:2]
+            sm = cv2.resize(frame, (self._rec["width"], round(self._rec["width"] * h / w / 2) * 2))
+            self._rec["frames"].append((now, cv2.imencode(".jpg", sm, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()))
         if self._played is not None and frame is not None:
             import cv2
             h, w = frame.shape[:2]
@@ -202,7 +231,29 @@ class AVSync:
         p, d = self.pipeline_ms(), self.delay_ms()
         return {"pipeline_ms": None if p is None else round(p), "chain_ms": self.chain_ms,
                 "delay_ms": None if d is None else round(d),
-                "monitor": dict(self.monitor.stats) if self.monitor else None, "test": dict(self.test)}
+                "monitor": dict(self.monitor.stats) if self.monitor else None, "test": dict(self.test),
+                "voice": self.monitor.voice.stats() if self.monitor and self.monitor.voice else None}
+
+    # A/V recording: what you see (played frames) + what you hear (the delayed, possibly converted audio)
+    def record_av(self, path, width=480):
+        """Record from now until close() (max 3 min) and write an mp4 on one timeline, so the clip shows the real
+        A/V sync of the live output."""
+        if self.monitor is None:
+            self.log("record_av needs the audio monitor")
+            return
+        self._rec = {"path": Path(path), "width": width, "frames": []}
+        self.monitor.record_av = []
+
+    def _finish_record(self):
+        rec, audio = self._rec, self.monitor.record_av
+        self._rec, self.monitor.record_av = None, None
+        if not rec["frames"] or not audio:
+            self.log("record_av: nothing recorded")
+            return
+        import cv2
+        frames = [(t, cv2.imdecode(np.frombuffer(j, np.uint8), cv2.IMREAD_COLOR)) for t, j in rec["frames"]]
+        p = self._write_clip([(t, 0, f) for t, f in frames], audio, rec["path"])
+        self.log(f"A/V recording: {p} ({frames[-1][0] - frames[0][0]:.0f} s)")
 
     # sync test
     def start_test(self, window=True, after_s=0.0):
@@ -255,9 +306,10 @@ class AVSync:
             self.log(f"sync test clip failed: {e}")
 
     @staticmethod
-    def _write_clip(played, audio):
+    def _write_clip(played, audio, out=CLIP):
         """Played frames + the delayed audio on one timeline (what you'd see and hear), 25 fps mp4."""
-        CLIP.parent.mkdir(parents=True, exist_ok=True)
+        out = Path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
         t0 = max(played[0][0], audio[0][0]); t1 = min(played[-1][0], audio[-1][0])
         pcm = np.zeros(int((t1 - t0) * SR) + SR, np.int16)
         for t, b in audio:
@@ -272,14 +324,19 @@ class AVSync:
         p = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w_}x{h}",
                               "-r", "25", "-i", "-", "-i", str(wav), "-c:v", "libx264", "-pix_fmt", "yuv420p",
                               "-profile:v", "high", "-level", "4.1", "-c:a", "aac", "-shortest", "-movflags",
-                              "+faststart", str(CLIP)], stdin=subprocess.PIPE)
+                              "+faststart", str(out)], stdin=subprocess.PIPE)
         ft = [f[0] for f in played]
         for k in range(int((t1 - t0) * 25)):
             p.stdin.write(played[max(0, bisect.bisect_right(ft, t0 + k / 25) - 1)][2].tobytes())
         p.stdin.close(); p.wait()
-        return CLIP
+        return out
 
     def close(self):
+        if self._rec is not None:
+            try:
+                self._finish_record()
+            except Exception as e:  # noqa: BLE001
+                self.log(f"record_av failed: {e}")
         if self.monitor:
             self.monitor.close()
 

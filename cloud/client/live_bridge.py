@@ -58,6 +58,19 @@ p.add_argument("--monitor-source", default="default", help="--audio-monitor audi
                "sources; default = laptop mic) or 'airplay' = the phone's own sound via tools/iphone_airplay.sh PHONE_AUDIO=1")
 p.add_argument("--monitor-offset-ms", type=float, default=0, help="--audio-monitor: manual adjustment added to the "
                "automatic delay (+ = audio later); normally 0: run the A/V sync test instead")
+p.add_argument("--voice", default="off", choices=["off", "rvc"], help="--audio-monitor: change the voice before "
+               "playing it (rvc = an RVC v2 model on the local GPU, tools/rvc_live). Runs inside the A/V delay, so it "
+               "adds no latency and stays in sync")
+p.add_argument("--voice-model", default=None, help="--voice rvc: model .pth (its .index next to it is used); default "
+               "models/rvc/karen/karen.pth")
+p.add_argument("--voice-pitch", type=int, default=5, help="--voice rvc: pitch shift in semitones (+5 = male -> female; "
+               "0 for a speaker already in the target's range)")
+p.add_argument("--voice-index-rate", type=float, default=0.5, help="--voice rvc: feature-index strength 0..1")
+p.add_argument("--voice-gain", type=float, default=-6.0, help="--voice: output gain in dB")
+p.add_argument("--voice-cmd", default=None, help="--voice: any converter command speaking the voice-stage protocol "
+               "(cloud/client/voice_stage.py) instead of the preset")
+p.add_argument("--record-av", default=None, help="--audio-monitor: record the played video + the delayed (converted) "
+               "audio on one timeline to this mp4 (written at exit, max 3 min): shows the real A/V sync")
 p.add_argument("--synctest-auto", type=float, default=None, help="(testing) start the A/V sync test N s after the start "
                "WITHOUT the flashing window: the input itself must contain flashes + beeps (tools/av_sync_selftest.sh)")
 p.add_argument("--no-camera-fix", action="store_true", help="don't lock the v4l2 camera's frame rate (by default the "
@@ -572,6 +585,13 @@ async def main():
              "freeze_kv_on_static": False, **json.loads(args.extra)}
     if ref:
         start["ref_image"] = ref
+    # voice stage first: its model load (~15 s) must not stall a live input that is already connected
+    blog = lambda m: print("[bridge] " + m, flush=True)  # noqa: E731
+    voice = None
+    if args.audio_monitor and (args.voice != "off" or args.voice_cmd):
+        from voice_stage import VoiceStage, build_cmd
+        voice = VoiceStage(build_cmd(args.voice, model=args.voice_model, pitch=args.voice_pitch,
+                                     index_rate=args.voice_index_rate, gain=args.voice_gain, cmd=args.voice_cmd), log=blog)
     src = Source(args.input)
     ff = FaceFixer() if args.facefix != "off" else None
     queue = collections.deque()          # (frame, t_capture_ms)
@@ -582,8 +602,10 @@ async def main():
         args.monitor_source = "airplay_audio.monitor"
     sync = AVSync("net" if src.net else "webcam" if src.live else "file", args.input,
                   monitor_source=args.monitor_source if args.audio_monitor else None, adjust_ms=args.monitor_offset_ms,
-                  log=lambda m: print("[bridge] " + m, flush=True))
+                  log=blog, voice=voice)
     src.on_frame = sync.on_input
+    if args.record_av:
+        sync.record_av(args.record_av)
     if args.synctest_auto is not None:
         sync.start_test(window=False, after_s=args.synctest_auto)
     stop = asyncio.Event()
@@ -1015,6 +1037,10 @@ async def main():
 
 
 if __name__ == "__main__":
+    import signal
+    # Ctrl+C also when started in the background by a script (bash ignores SIGINT there); SIGTERM = the same clean stop
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

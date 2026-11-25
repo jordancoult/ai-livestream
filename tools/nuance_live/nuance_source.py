@@ -46,6 +46,9 @@ class Nuance:
         self.audio_proc = None
         self.n_video = 0
         self.n_audio = 0
+        self.rec_v = None          # --record: raw persona video (h264, frames as they arrive) + its audio
+        self.rec_a = None
+        self.rec_t = {}
 
     async def http(self, s, method, path, token, body=None):
         h = {"Authorization": f"Bearer {token}"}
@@ -176,6 +179,22 @@ class Nuance:
                     p.stdin.close()
                     p.kill()
             log(f"left: {self.n_video} video frames, {self.n_audio / SR:.0f} s audio forwarded")
+            if self.a.record and self.rec_v is not None and self.rec_a is not None:
+                self.finish_record()
+
+    def finish_record(self):
+        """Mux the recording: video at its measured frame rate, audio shifted by (first audio - first video)."""
+        self.rec_v.stdin.close(); self.rec_v.wait(); self.rec_a.close()
+        t = self.rec_t
+        fps = (t["nv"] - 1) / max(1e-3, t["v1"] - t["v0"])
+        off = t["a0"] - t["v0"]
+        out = self.a.record
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-r", f"{fps:.4f}", "-i", out + ".v.mp4",
+                        "-itsoffset", f"{off:.3f}", "-f", "s16le", "-ar", str(SR), "-ac", "1", "-i", out + ".a.raw",
+                        "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                        "-movflags", "+faststart", out], check=True)
+        Path(out + ".v.mp4").unlink(); Path(out + ".a.raw").unlink()
+        log(f"recorded {out} ({t['nv']} frames at {fps:.2f} fps, audio offset {off * 1000:+.0f} ms)")
 
     async def mic(self, src):
         """Your mic (PulseAudio source via ffmpeg) or silence, in 10 ms frames; the persona needs a constant track."""
@@ -201,6 +220,9 @@ class Nuance:
         stream = rtc.VideoStream(track, format=rtc.VideoBufferType.RGB24)
         async for ev in stream:
             f = ev.frame
+            if self.video_proc is None and self.a.srt == "none":
+                self.size = (f.width, f.height)
+                self.video_proc = False
             if self.video_proc is None:
                 log(f"persona video {f.width}x{f.height} -> {self.a.srt}")
                 self.video_proc = subprocess.Popen(
@@ -210,6 +232,19 @@ class Nuance:
                      "-f", "mpegts", f"{self.a.srt}?mode=caller&latency=20"], stdin=subprocess.PIPE)
                 self.size = (f.width, f.height)
             if (f.width, f.height) != self.size:
+                continue
+            if self.a.record:
+                if self.rec_v is None:
+                    self.rec_t["v0"] = time.time()
+                    self.rec_v = subprocess.Popen(
+                        ["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s",
+                         f"{f.width}x{f.height}", "-r", "25", "-i", "-", "-c:v", "libx264", "-preset", "veryfast",
+                         "-crf", "16", "-pix_fmt", "yuv420p", self.a.record + ".v.mp4"], stdin=subprocess.PIPE)
+                self.rec_t["v1"] = time.time()
+                self.rec_t["nv"] = self.rec_t.get("nv", 0) + 1
+                self.rec_v.stdin.write(bytes(f.data))
+            if self.video_proc is False:
+                self.n_video += 1
                 continue
             try:
                 self.video_proc.stdin.write(bytes(f.data))
@@ -225,6 +260,11 @@ class Nuance:
         log(f"persona audio -> {self.a.sink}")
         async for ev in stream:
             b = bytes(ev.frame.data)
+            if self.a.record:
+                if self.rec_a is None:
+                    self.rec_t["a0"] = time.time()
+                    self.rec_a = open(self.a.record + ".a.raw", "wb")
+                self.rec_a.write(b)
             try:
                 self.audio_proc.stdin.write(b)
                 self.n_audio += len(b) // 2
@@ -245,6 +285,8 @@ def main():
     ap.add_argument("--expressiveness", type=float, default=1.0)
     ap.add_argument("--timezone", default="America/Los_Angeles")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--record", default=None, help="also save the persona's raw video + audio to this mp4 (a reusable "
+                    "test input: tools/voice_swap_test.sh plays it like a live persona, no credits)")
     a = ap.parse_args()
     import signal
     signal.signal(signal.SIGINT, signal.default_int_handler)

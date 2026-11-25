@@ -46,9 +46,11 @@ def main():
     ap.add_argument("--block-ms", type=int, default=100)
     ap.add_argument("--pitch", type=int, default=5)
     ap.add_argument("--seconds", type=float, default=30)
+    ap.add_argument("--device", default=None)
+    ap.add_argument("--extra", type=float, default=0.5)
     a = ap.parse_args()
     x = load(a.inp)[: int(a.seconds * SR)]
-    eng = RVCEngine(block_ms=a.block_ms, pitch=a.pitch)
+    eng = RVCEngine(block_ms=a.block_ms, pitch=a.pitch, device=a.device, extra_s=a.extra)
     print(f"engine ready: block {eng.block} samples, warmup {eng.warmup_ms:.1f} ms, "
           f"declared delay {eng.delay_ms:.0f} ms", flush=True)
     out, times = [], []

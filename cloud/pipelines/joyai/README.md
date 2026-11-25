@@ -79,9 +79,10 @@ change survives the bf16 add (vs ~30% merged into bf16, ~7% merged into FP8).
 ## Recipe (what works)
 - **Reference:** a full-body character image on a plain background (`assets/char_front.png`). An upper-body
   crop turned G-Star into a realistic human torso.
-- **Prompt:** describe the character explicitly (shape, face, skin, clothing, accessories), plus "Keep the pose,
-  gestures and hand movements" (`prompts/gstar.txt`). The generic "replace with the character from the reference
-  image" only transfers accessories. The built-in prompt enhancer (`use_pe`) made identity worse, so it's off.
+- **Prompt (rule since 2026-11-25, the user's call): JoyAI's own character-replacement preset for every character
+  swap: "Replace me with the character in the reference picture."** (`prompts/replace.txt`; `gstar.txt`, `karen.txt`,
+  `human_blonde.txt` hold the same). With the 1.1 weights it works well; the earlier finding (explicit descriptions
+  beat the generic prompt, `prompts/gstar_hatfix.txt`) was on the 1.0 weights. The built-in prompt enhancer (`use_pe`) made identity worse, so it's off.
 - **Checkpoint `1101_face++`** (released 2026-11-01) over `0811`: clearly better human identity and motion.
 - **Session options** (start message): `detection_mode: "off"`, `use_pe: false`, `kv_reset_frames: 0` (no drift
   in 2 min; the default 600 resets every 25 s without a visible jump), H.264 both ways.

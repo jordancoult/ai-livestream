@@ -5,7 +5,8 @@ LiveKit room, sends the persona's video to the bridge over SRT and its audio to 
 (or silence) to the persona. `tools/nuance_karen.sh` runs the whole chain:
 
     persona video -> SRT -> bridge -> JoyAI (face swap) -> window / OBS
-    persona audio -> nuance_audio sink -> bridge --voice rvc (Karen) -> delayed to match the JoyAI output -> headphones
+    persona audio -> nuance_audio sink -> bridge --voice rvc --voice-host joyai (Karen, on the JoyAI GPU) -> delayed
+                     to match the JoyAI output -> headphones
     your mic -> persona (it answers you)
 
     cloud/infra/tunnel.sh start          # JoyAI up
@@ -14,3 +15,9 @@ LiveKit room, sends the persona's video to the bridge over SRT and its audio to 
 
 Personas: sam, sonia, mira (`PERSONA=`); video 704x640 at ~25 fps. Plan limits seen 2026-11-25: 1 conversation at a
 time, 10 credits/day. The persona never speaks first: `SAY=` is its first line.
+
+Defaults (2026-11-25): persona mira (photo-real; sam is illustrated, sonia a 3D cartoon), Karen reference
+(`assets/karen-interviewer.png`) with the JoyAI preset prompt, lpfast `girl` preset, voice on the JoyAI box (run
+`cloud/infra/voice_up.sh joyai` once per box). Credits: test with the recording `assets/nuance_mira_100s.mp4`
+(`tools/voice_swap_test.sh`, made with `nuance_source.py --record`), not live sessions. Nuance's video carries a small
+"AI" watermark that JoyAI copies into the output.

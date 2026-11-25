@@ -10,6 +10,7 @@ needs anyway to wait for the video; only a stage slower than the whole pipeline 
 New converters (another RVC model, a zero-shot VC) = one more entry in PRESETS or --voice-cmd.
 """
 import collections
+import os
 import shlex
 import subprocess
 import threading
@@ -25,23 +26,34 @@ PRESETS = {
 }
 
 
-def build_cmd(kind, model=None, pitch=5, index_rate=0.5, block_ms=100, gain=-6.0, cmd=None):
+def build_cmd(kind, model=None, pitch=5, index_rate=0.5, block_ms=100, gain=-6.0, cmd=None, host=None):
+    """host: run the stage on a GPU machine (cloud/infra/.pod.<host>, set up by cloud/infra/voice_up.sh <host>)
+    through an SSH pipe instead of the local GPU. The network round trip is counted in the A/V delay like the rest."""
     if cmd:
         return shlex.split(cmd)
+    if host:
+        model = f"models/rvc/{Path(model).parent.name}/{Path(model).name}" if model else "models/rvc/karen/karen.pth"
+        remote = PRESETS[kind].format(repo=".", model=model, pitch=pitch, index_rate=index_rate, block_ms=block_ms,
+                                      gain=gain)
+        return ["env", f"POD_FILE={REPO}/cloud/infra/.pod.{host}", "bash", str(REPO / "cloud" / "infra" / "pod.sh"),
+                f"cd /workspace/rvc && {remote}"]
     model = model or str(REPO / "models" / "rvc" / "karen" / "karen.pth")
     return shlex.split(PRESETS[kind].format(repo=REPO, model=model, pitch=pitch, index_rate=index_rate,
                                             block_ms=block_ms, gain=gain))
 
 
 class VoiceStage:
-    def __init__(self, cmd, log=print, ready_timeout=180):
+    def __init__(self, cmd, log=print, ready_timeout=180, gpu_share=None):
         self.log, self.cmd = log, cmd
         self.out = collections.deque()      # converted 10 ms blocks
         self.sent = self.moved = 0          # 10 ms blocks fed / handed to the delay line
         self.delay_ms, self.block = None, None
         self.failed = False
         self._partial = b""
-        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        env = dict(os.environ)
+        if gpu_share:   # under CUDA MPS: the stage may use only this % of the GPU's SMs, the rest stays free for video
+            env["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = str(gpu_share)
+        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self._ready = threading.Event()
         threading.Thread(target=self._stderr, daemon=True).start()
         if not self._ready.wait(ready_timeout) or self.delay_ms is None:

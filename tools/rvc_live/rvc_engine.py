@@ -24,10 +24,12 @@ def _find_index(model_path):
 
 class RVCEngine:
     def __init__(self, model_path=DEFAULT_MODEL, index_path=None, block_ms=100, pitch=5, index_rate=0.5,
-                 protect=0.5, f0_method="rmvpe", crossfade_s=0.05, extra_s=0.5, silent_threshold_db=-60):
+                 protect=0.5, f0_method="rmvpe", crossfade_s=0.05, extra_s=0.5, silent_threshold_db=-60, device=None):
         if not os.path.isdir(APPLIO):
             raise SystemExit(f"Applio not found at {APPLIO}: run tools/rvc_live/setup.sh")
         cwd = os.getcwd()
+        model_path = os.path.abspath(model_path)
+        index_path = os.path.abspath(index_path) if index_path else _find_index(model_path)
         os.chdir(APPLIO)  # Applio resolves its model assets relative to the working directory
         sys.path.insert(0, APPLIO)
         try:
@@ -36,9 +38,8 @@ class RVCEngine:
             self.kw = dict(f0_up_key=pitch, index_rate=index_rate, protect=protect)
             self.vc = VoiceChanger(
                 block_frame=self.block, cross_fade_overlap_size=crossfade_s, extra_convert_size=extra_s,
-                model_path=os.path.abspath(os.path.join(cwd, model_path)),
-                index_path=index_path or _find_index(model_path), f0_method=f0_method,
-                embedder_model="contentvec", silent_threshold=silent_threshold_db, sid=0)
+                model_path=model_path, index_path=index_path, f0_method=f0_method,
+                embedder_model="contentvec", silent_threshold=silent_threshold_db, sid=0, device=device)
             self.warmup_ms = self.vc.warmup(**self.kw)
         finally:
             os.chdir(cwd)

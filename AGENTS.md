@@ -13,6 +13,10 @@ least the upper body with arms). Others so far: prompt-driven "dream"/world gene
 | **Local laptop** (RTX 5080 Laptop 16 GB) | repo root: `start_scope.sh`, `tools/`, `scope/` (fork `jordancoult/scope`, branch `blackwell-realtime`; this repo: `main`), `saved_settings/` | Works, 17–26 fps at 640×352; weak reference identity. **Don't break it**: the user's presets and saves live here |
 | **Cloud pipelines** (rented Blackwell GPU) | `cloud/` | **JoyAI-Video-Edit meets the goal on one RTX 5090** (25–27 fps, 0.46 s on the GPU machine, ~1 s glass-to-glass from the laptop to EU) |
 
+**Live character mode (standard mode since 2026-11-25):** a conversational AI persona (Nuance Live) becomes one of our
+characters live (JoyAI appearance + lpfast + RVC voice + personality/name), `tools/character_live.py <name>`;
+characters in `characters/` (README there).
+
 Read next: `cloud/README.md` (cloud overview + pipeline index) · `README_QUICKSTART.md` (local setup, benchmarks,
 patches) · `cloud/docs/lessons.md` (hard-won rules).
 

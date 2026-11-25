@@ -1,0 +1,27 @@
+{
+  "name": "Karen",
+  "description": "Fictional interviewer / streamer (the user's character). First character, set up 2026-11-25.",
+  "appearance": {
+    "reference": "characters/karen/reference.png",
+    "prompt_file": "cloud/pipelines/joyai/prompts/replace.txt"
+  },
+  "face_pass": {
+    "lpfast_preset": "karen"
+  },
+  "voice": {
+    "kind": "rvc",
+    "model": "models/rvc/karen/karen.pth",
+    "model_source": "trained by the user on 12.7 min of Karen speech (RVC v2, 40k, 200 epochs, rmvpe); not in git",
+    "pitch": 0,
+    "index_rate": 0.5,
+    "block_ms": 200
+  },
+  "conversation": {
+    "service": "nuance_live",
+    "persona_id": "mira",
+    "personality_file": "characters/karen/personality.md",
+    "first_line": "Say hi to your viewers and introduce yourself.",
+    "expressiveness": 1.0,
+    "test_clip": "assets/nuance_mira_100s.mp4"
+  }
+}

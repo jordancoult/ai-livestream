@@ -13,6 +13,7 @@
     "model": "models/rvc/karen/karen.pth",
     "model_source": "trained by the user (README.txt next to the model); private HF repo JordanCo/ai-livestream-artifacts, voices/karen/v3 (v2 kept as voices/karen/v2); fetch: tools/rvc_live/get_voice.py --all",
     "pitch": 0,
+    "pitch_self": 5,
     "index_rate": 0.5,
     "block_ms": 200,
     "version": "v3 (Applio + TITAN-Medium 48k, epoch 275, 2026-11-25)",
@@ -28,5 +29,9 @@
     "expressiveness": 1.0,
     "test_clip": "assets/nuance_mira_100s.mp4",
     "personality_source": "condensed (2.5k chars) from the user's full Karen character brief (9 TikTok transcripts), not stored here"
+  },
+  "self_drive": {
+    "note": "you drive the character (tools/character_live.py karen --driver webcam|phone|srt): your camera is the source video, your mic the source voice (converted to Karen's live, pitch_self semitones up: the model README's +5 for a male voice)",
+    "test_clip": "assets/self_drive_test.mp4"
   }
 }

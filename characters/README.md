@@ -9,6 +9,20 @@ the character's personality and name.
     tools/character_live.py karen            # live (headphones), output window + dashboard :8765
     tools/character_live.py karen --test     # recorded persona clip, no Nuance credits, records a review mp4
 
+**Two drivers, same character pipeline.** The source video + source voice come either from the Nuance persona
+(above) or from YOU: your camera is the source video, your mic the source voice (converted live to the character's
+voice, `voice.pitch_self` semitones up, delayed to stay in sync with the output video):
+
+    tools/character_live.py karen --driver webcam            # laptop webcam (--camera /dev/videoN) + mic
+    tools/character_live.py karen --driver phone             # iPhone camera via AirPlay mirroring (starts
+                                                             # tools/iphone_airplay.sh; mirror to "JoyAI-Cam") + mic
+    tools/character_live.py karen --driver srt               # phone app streaming SRT to port 9000 (Larix) + mic
+    tools/character_live.py karen --driver webcam --test     # self-drive test clip (assets/self_drive_test.mp4)
+    options: --mic SOURCE (e.g. a headset mic; pactl list short sources), --pitch N, --bridge-args '--input-rotate cw'
+
+Wear headphones (your converted voice plays back in sync; speakers would feed it into the mic). Run the
+dashboard's A/V sync test once per camera kind so the camera's own delay is compensated (saved per input kind).
+
 ## A character folder: `characters/<name>/`
 | File / field | What | Where it is used |
 |---|---|---|
@@ -20,6 +34,8 @@ the character's personality and name.
 | `conversation.persona_id` | Nuance persona that drives it (face + voice it starts from): `mira` (photo-real) works best with lpfast; `sam` is illustrated, `sonia` a 3D cartoon | Nuance session |
 | `conversation.personality_file` | the persona's system prompt: who the character is, starting with "You are <name>, ..." (Nuance: the persona has no name unless the prompt gives one; spoken style, short; it must not claim to be human) | Nuance `personality.system_prompt` |
 | `conversation.first_line` | what it says first (it never speaks first) | Nuance `response.create` |
+| `voice.pitch_self` | pitch when YOU drive (your voice -> the character's; +5 for a male voice into Karen) | `--driver webcam/phone/srt` |
+| `self_drive.test_clip` | a face + voice clip standing in for your camera/mic | `--driver webcam --test` |
 | `conversation.test_clip` | a recorded session of that persona (`nuance_source.py --record`) for credit-free tests | `--test` |
 
 ## Adding a character

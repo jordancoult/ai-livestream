@@ -15,7 +15,8 @@ least the upper body with arms). Others so far: prompt-driven "dream"/world gene
 
 **Live character mode (standard mode since 2026-11-25):** a conversational AI persona (Nuance Live) becomes one of our
 characters live (JoyAI appearance + lpfast + RVC voice + personality/name), `tools/character_live.py <name>`;
-characters in `characters/` (README there).
+characters in `characters/` (README there). Driver: the Nuance persona (default) or the user themself
+(`--driver webcam|phone|srt`: their camera = source video, their mic = source voice -> the character's voice).
 
 Read next: `cloud/README.md` (cloud overview + pipeline index) · `README_QUICKSTART.md` (local setup, benchmarks,
 patches) · `cloud/docs/lessons.md` (hard-won rules).

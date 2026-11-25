@@ -11,10 +11,14 @@
   "voice": {
     "kind": "rvc",
     "model": "models/rvc/karen/karen.pth",
-    "model_source": "trained by the user on 12.7 min of Karen speech (RVC v2, 40k, 200 epochs, rmvpe); not in git",
+    "model_source": "trained by the user (README.txt next to the model); private HF repo JordanCo/ai-livestream-artifacts, voices/karen/v3 (v2 kept as voices/karen/v2); fetch: tools/rvc_live/get_voice.py --all",
     "pitch": 0,
     "index_rate": 0.5,
-    "block_ms": 200
+    "block_ms": 200,
+    "version": "v3 (Applio + TITAN-Medium 48k, epoch 275, 2026-11-25)",
+    "protect": 0.33,
+    "rms_mix": 0.25,
+    "hf": "voices/karen/v3"
   },
   "conversation": {
     "service": "nuance_live",

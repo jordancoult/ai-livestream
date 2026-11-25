@@ -22,11 +22,12 @@ BLOCK_BYTES = 480 * 2   # 10 ms at 48 kHz, s16 mono (the monitor's block)
 PRESETS = {
     # RVC v2 via Applio's realtime core on the local GPU (~15 ms compute per 100 ms block on an RTX 5080 Laptop)
     "rvc": "{repo}/tools/rvc_live/.venv/bin/python {repo}/tools/rvc_live/serve.py --model {model} --pitch {pitch} "
-           "--index-rate {index_rate} --block-ms {block_ms} --gain {gain}",
+           "--index-rate {index_rate} --block-ms {block_ms} --gain {gain} --protect {protect} --rms-mix {rms_mix}",
 }
 
 
-def build_cmd(kind, model=None, pitch=5, index_rate=0.5, block_ms=100, gain=-6.0, cmd=None, host=None):
+def build_cmd(kind, model=None, pitch=5, index_rate=0.5, block_ms=100, gain=-6.0, cmd=None, host=None,
+              protect=0.5, rms_mix=1.0):
     """host: run the stage on a GPU machine (cloud/infra/.pod.<host>, set up by cloud/infra/voice_up.sh <host>)
     through an SSH pipe instead of the local GPU. The network round trip is counted in the A/V delay like the rest."""
     if cmd:
@@ -34,12 +35,12 @@ def build_cmd(kind, model=None, pitch=5, index_rate=0.5, block_ms=100, gain=-6.0
     if host:
         model = f"models/rvc/{Path(model).parent.name}/{Path(model).name}" if model else "models/rvc/karen/karen.pth"
         remote = PRESETS[kind].format(repo=".", model=model, pitch=pitch, index_rate=index_rate, block_ms=block_ms,
-                                      gain=gain)
+                                      gain=gain, protect=protect, rms_mix=rms_mix)
         return ["env", f"POD_FILE={REPO}/cloud/infra/.pod.{host}", "bash", str(REPO / "cloud" / "infra" / "pod.sh"),
                 f"cd /workspace/rvc && {remote}"]
     model = model or str(REPO / "models" / "rvc" / "karen" / "karen.pth")
     return shlex.split(PRESETS[kind].format(repo=REPO, model=model, pitch=pitch, index_rate=index_rate,
-                                            block_ms=block_ms, gain=gain))
+                                            block_ms=block_ms, gain=gain, protect=protect, rms_mix=rms_mix))
 
 
 class VoiceStage:

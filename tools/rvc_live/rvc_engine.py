@@ -24,7 +24,7 @@ def _find_index(model_path):
 
 class RVCEngine:
     def __init__(self, model_path=DEFAULT_MODEL, index_path=None, block_ms=100, pitch=5, index_rate=0.5,
-                 protect=0.5, f0_method="rmvpe", crossfade_s=0.05, extra_s=0.5, silent_threshold_db=-60, device=None):
+                 protect=0.5, rms_mix=1.0, f0_method="rmvpe", crossfade_s=0.05, extra_s=0.5, silent_threshold_db=-60, device=None):
         if not os.path.isdir(APPLIO):
             raise SystemExit(f"Applio not found at {APPLIO}: run tools/rvc_live/setup.sh")
         cwd = os.getcwd()
@@ -35,7 +35,7 @@ class RVCEngine:
         try:
             from rvc.realtime.core import VoiceChanger
             self.block = int(SR * block_ms / 1000) // 480 * 480
-            self.kw = dict(f0_up_key=pitch, index_rate=index_rate, protect=protect)
+            self.kw = dict(f0_up_key=pitch, index_rate=index_rate, protect=protect, volume_envelope=rms_mix)
             self.vc = VoiceChanger(
                 block_frame=self.block, cross_fade_overlap_size=crossfade_s, extra_convert_size=extra_s,
                 model_path=model_path, index_path=index_path, f0_method=f0_method,

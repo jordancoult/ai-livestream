@@ -74,6 +74,8 @@ p.add_argument("--voice-host", default=None, help="--voice: run the converter on
                "e.g. 'joyai' (cloud/infra/.pod.joyai, set up once with cloud/infra/voice_up.sh joyai). On the laptop "
                "it competes with the face pass for the GPU (lpfast 95%% -> 24-90%% frames); on the JoyAI 5090 it costs "
                "~3%% chunk time and the face pass keeps 97%%")
+p.add_argument("--voice-protect", type=float, default=0.5, help="--voice rvc: consonant protection (0.33 typical)")
+p.add_argument("--voice-rms-mix", type=float, default=1.0, help="--voice rvc: volume envelope (1 = model loudness)")
 p.add_argument("--voice-gain", type=float, default=-6.0, help="--voice: output gain in dB")
 p.add_argument("--voice-cmd", default=None, help="--voice: any converter command speaking the voice-stage protocol "
                "(cloud/client/voice_stage.py) instead of the preset")
@@ -660,7 +662,7 @@ async def main():
         from voice_stage import VoiceStage, build_cmd
         voice = VoiceStage(build_cmd(args.voice, model=args.voice_model, pitch=args.voice_pitch,
                                      index_rate=args.voice_index_rate, block_ms=args.voice_block_ms, gain=args.voice_gain,
-                                     host=args.voice_host,
+                                     host=args.voice_host, protect=args.voice_protect, rms_mix=args.voice_rms_mix,
                                      cmd=args.voice_cmd), log=blog, gpu_share=args.voice_gpu_share)
     src = Source(args.input)
     ff = FaceFixer() if args.facefix != "off" else None

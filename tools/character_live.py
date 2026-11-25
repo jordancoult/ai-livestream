@@ -87,6 +87,7 @@ def main():
               "--audio-monitor", "--monitor-source", "char_audio.monitor",
               "--voice", "off" if a.no_voice else v["kind"], "--voice-model", str(REPO / v["model"]), "--voice-pitch", str(v["pitch"]),
               "--voice-index-rate", str(v["index_rate"]), "--voice-block-ms", str(v["block_ms"]),
+              "--voice-protect", str(v.get("protect", 0.5)), "--voice-rms-mix", str(v.get("rms_mix", 1.0)),
               "--seconds", str(int(run_s + 40))]
     if a.voice_host and not a.no_voice:
         bridge += ["--voice-host", a.voice_host]

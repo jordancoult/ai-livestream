@@ -17,7 +17,8 @@ video pipeline is slower than the stage (JoyAI ~0.9 s vs the stage ~0.17 s).
   and plug in with `--voice-cmd`.
 - `offline_stream_test.py IN OUT`: block-by-block conversion of a file, timing + delay.
 - `monitor_delay_test.py CLIP`: virtual mic -> monitor -> virtual output, delay with the stage off vs on.
-- Pitch: `--voice-pitch` (+5 male -> Karen per the model's README, 0 for a female speaker).
+- Pitch: `--voice-pitch` (+5 male -> Karen per the model's README, 0 for a female speaker). `--voice-protect` / `--voice-rms-mix`: the model README's protect / volume envelope (Karen v3: 0.33 / 0.25, set in characters/karen/character.json).
+- Voices live in the private HF repo `JordanCo/ai-livestream-artifacts` under `voices/<name>/<version>/`; `get_voice.py --all` fetches every character's (`voice.hf`), `cloud/infra/voice_up.sh` does it on the GPU box.
 
 Non-commercial experiment (the RVC models are trained on a real person's voice; use with their consent only).
 

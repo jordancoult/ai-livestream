@@ -12,7 +12,7 @@ bridge's options used here all default to off).
   tools/character_live.py karen                 live: talk to it (HEADPHONES), output window + dashboard :8765
   tools/character_live.py karen --test          the character's recorded persona clip instead of a live session
                                                 (no Nuance credits), nothing audible, records the result
-  tools/character_live.py karen --test --seconds 30 --out ~/Videos/ai-livestream-tests/x.mp4
+  tools/character_live.py karen --test --seconds 30 --out test-outputs/x.mp4
   options: --voice-host '' (voice on the laptop GPU: starves lpfast, see tools/rvc_live/README.md), --mic SOURCE,
            --max-seconds N (live session length), --no-face-pass, --bridge-args '...' (extra live_bridge flags)
 Needs: JoyAI up + tunnel (cloud/infra/tunnel.sh start) and the voice installed there (cloud/infra/voice_up.sh joyai).
@@ -72,7 +72,7 @@ def main():
     v, conv = c["voice"], c["conversation"]
     tmp = REPO / ".tmp" / "character"
     tmp.mkdir(parents=True, exist_ok=True)
-    out = a.out or (str(Path.home() / "Videos/ai-livestream-tests" / f"{a.character}-{time.strftime('%m%d-%H%M')}.mp4")
+    out = a.out or (str(REPO / "test-outputs" / f"{a.character}-{time.strftime('%m%d-%H%M')}.mp4")
                     if a.test else None)
 
     mods = [sink("char_audio")]

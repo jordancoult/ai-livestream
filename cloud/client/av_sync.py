@@ -22,7 +22,7 @@ Any pipeline integrates it with these calls (live_bridge.py is the reference):
 
 Sync test: a full-screen window flashes and beeps at every flash (own process). The camera sees the flash, the mic hears
 the beep. Input arrival vs undelayed mic -> camera chain (saved, applied from then on); played video vs delayed audio ->
-the remaining A/V offset, plus a clip in ~/Videos/ai-livestream-tests/av-sync-test.mp4. Unattended version with a virtual
+the remaining A/V offset, plus a clip in test-outputs/av-sync-test.mp4. Unattended version with a virtual
 camera + mic: tools/av_sync_selftest.sh.
 """
 
@@ -41,7 +41,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[2]
 TMP = REPO / ".tmp"
 CHAIN_FILE = TMP / "av_chain.json"
-CLIP = Path.home() / "Videos" / "ai-livestream-tests" / "av-sync-test.mp4"
+CLIP = Path(__file__).resolve().parents[2] / "test-outputs" / "av-sync-test.mp4"
 SR, BLOCK = 48000, 480   # 10 ms audio blocks
 PLAY_LATENCY_MS = 30     # pacat --latency-msec
 DEADBAND_BLOCKS = 3      # monitor: delay errors below 30 ms are left alone (no audible correction)

@@ -10,7 +10,7 @@
 #      (default: virtual output only, nothing audible)
 set -u
 cd "$(dirname "$0")/.."
-CLIP=$1; OUT=${2:-$HOME/Videos/ai-livestream-tests/voice-swap-test.mp4}
+CLIP=$1; OUT=${2:-test-outputs/voice-swap-test.mp4}
 URL=${URL:-ws://127.0.0.1:18080/ws}; PORT=9021; SECONDS_RUN=${DURATION:-40}; T=.tmp/voiceswap; mkdir -p $T
 PY=cloud/facefix/.venv/bin/python
 REF=${REF:-assets/blonde-gamer-girl.png}; PROMPT=$(cat ${PROMPT_FILE:-cloud/pipelines/joyai/prompts/replace.txt})

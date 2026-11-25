@@ -4,7 +4,7 @@ Model: jdopensource/JoyAI-VL-Interaction (8B, Apache-2.0): watches a video strea
 to stay silent / speak / delegate. Their stack (vLLM 0.22 + adapter; Qwen3-TTS via vLLM-Omni) on one rented RTX 5090.
 Test: the user's webcam clip (60 s) replayed in real time (`stream_test.py`), three conditions, then the replies voiced
 with Qwen3-TTS (voice "ryan") and put on G-Star through Ditto -> lpfast (audio-driven face, `cloud/lpfast/audio_driver.py`).
-Videos: `~/Videos/ai-livestream-tests/joyai-vl-persona.mp4`, `joyai-vl-questions.mp4` (webcam | G-Star co-host, captions, voice).
+Videos: `test-outputs/joyai-vl-persona.mp4`, `joyai-vl-questions.mp4` (webcam | G-Star co-host, captions, voice).
 
 ## Behaviour (INT4)
 | Run | Result |

@@ -11,6 +11,8 @@
 /.claude/
 # Personal/large media (character art, test clips, benchmark videos)
 /assets/
+# Sample/review media (index: test-outputs/README.md), kept local
+/test-outputs/
 /bench/*
 !/bench/results.jsonl
 __pycache__/

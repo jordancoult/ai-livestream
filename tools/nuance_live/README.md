@@ -11,7 +11,7 @@ LiveKit room, sends the persona's video to the bridge over SRT and its audio to 
 
     cloud/infra/tunnel.sh start          # JoyAI up
     tools/nuance_karen.sh                # live: talk to it (headphones!), dashboard on :8765
-    TEST=1 tools/nuance_karen.sh         # unattended 90 s recording into ~/Videos/ai-livestream-tests
+    TEST=1 tools/nuance_karen.sh         # unattended 90 s recording into test-outputs
 
 Personas: sam, sonia, mira (`PERSONA=`); video 704x640 at ~25 fps. Plan limits seen 2026-11-25: 1 conversation at a
 time, 10 credits/day. The persona never speaks first: `SAY=` is its first line.

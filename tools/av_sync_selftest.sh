@@ -2,7 +2,7 @@
 # Unattended A/V sync test of the bridge's --audio-monitor: no camera, mic or speakers.
 # A clip with flashes + a beep at every flash is streamed as the "phone" (SRT) while its audio plays into a virtual
 # PulseAudio sink that stands in for the mic; the bridge delays that audio by its live pipeline latency and measures
-# how far the delayed beeps are from the flashes in the played video (+ writes ~/Videos/ai-livestream-tests/av-sync-test.mp4).
+# how far the delayed beeps are from the flashes in the played video (+ writes test-outputs/av-sync-test.mp4).
 #   tools/av_sync_selftest.sh [joyai ws url]      (JoyAI tunnel up, no other bridge session; VOICE=rvc: through the voice stage)
 set -u
 cd "$(dirname "$0")/.."

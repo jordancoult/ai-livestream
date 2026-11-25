@@ -31,7 +31,7 @@ trap cleanup EXIT
 FF=(); [ -n "${FACEFIX:-}" ] && FF=(--facefix-preset "$FACEFIX")
 $PY cloud/client/live_bridge.py --url "$URL" --input "srt://0.0.0.0:$PORT" "${OUTPUT[@]}" --portrait --ref "$REF" \
   --prompt "$PROMPT" "${FF[@]}" --audio-monitor --monitor-source nuance_audio.monitor --voice rvc \
-  --voice-pitch "${PITCH:-0}" --record-av "$OUT" --seconds $((MAX_S + 40)) > $T/bridge.log 2>&1 &
+  --voice-pitch "${PITCH:-0}" --record-av "$OUT" --record-av-sbs --seconds $((MAX_S + 40)) > $T/bridge.log 2>&1 &
 BR=$!
 for i in $(seq 1 90); do grep -q "audio monitor\|Traceback" $T/bridge.log && break; kill -0 $BR 2>/dev/null || break; sleep 1; done
 grep -a "voice\|Traceback" $T/bridge.log

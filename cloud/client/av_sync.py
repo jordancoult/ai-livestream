@@ -46,6 +46,7 @@ SR, BLOCK = 48000, 480   # 10 ms audio blocks
 PLAY_LATENCY_MS = 30     # pacat --latency-msec
 DEADBAND_BLOCKS = 3      # monitor: delay errors below 30 ms are left alone (no audible correction)
 FORCE_BLOCKS = 8         # ... above 80 ms they are corrected even mid-speech (crossfaded)
+FORCE_GAP = 20           # ... at most one mid-speech correction per 200 ms
 JUMP_BLOCKS = 50         # ... above 500 ms (start, pipeline restart) it snaps at once
 QUIET_RMS = 0.004        # ... otherwise only in pauses (block RMS below about -48 dBFS)
 
@@ -55,14 +56,17 @@ def _rms(b):
     return float(np.sqrt((x * x).mean()))
 
 
-def _xfade(a, b, fade_out_only=False):
-    """One 10 ms block: a fading out into b fading in (equal power). fade_out_only: a fading to silence and back in
-    over the block (used to stretch by 10 ms mid-speech)."""
+def _fade(a, out_):
+    """A 10 ms block fading out (out_=True) or in."""
     x = np.frombuffer(a, np.int16).astype(np.float32)
     w = np.sin(np.linspace(0, np.pi / 2, len(x), dtype=np.float32))
-    if fade_out_only:
-        env = np.abs(np.cos(np.linspace(0, np.pi, len(x), dtype=np.float32)))
-        return (x * env).astype(np.int16).tobytes()
+    return (x * (w[::-1] if out_ else w)).astype(np.int16).tobytes()
+
+
+def _xfade(a, b):
+    """One 10 ms block: a fading out into b fading in (equal power): drops 10 ms without a click."""
+    x = np.frombuffer(a, np.int16).astype(np.float32)
+    w = np.sin(np.linspace(0, np.pi / 2, len(x), dtype=np.float32))
     y = np.frombuffer(b, np.int16).astype(np.float32)
     return np.clip(x * w[::-1] + y * w, -32768, 32767).astype(np.int16).tobytes()
 TEST_S = 15
@@ -80,6 +84,7 @@ class AudioMonitor:
         self.stats = {"delay_ms": None, "dropped": 0, "inserted": 0}
         self._adjusting = False
         self._smooth = None
+        self._since_force = 999
         self.mute = False       # sync test: keep timing, play silence (no speaker -> mic feedback loop)
         self.record = None      # sync test: list -> (write time, block) of what is played
         self.record_in = None   # sync test: list -> (capture time, block) as captured (undelayed)
@@ -162,13 +167,22 @@ class AudioMonitor:
                 self._adjusting = adjusting
                 head = buf[0]
                 quiet = _rms(head) < QUIET_RMS
-                force = abs(err) >= FORCE_BLOCKS
+                # mid-speech only for a large error, and at most one 10 ms correction per FORCE_GAP blocks
+                force = abs(err) >= FORCE_BLOCKS and self._since_force >= FORCE_GAP
+                self._since_force += 1
                 if adjusting and err > 0 and len(buf) > 1 and (quiet or force):
                     a, b = buf.popleft(), buf.popleft()          # two blocks -> one, crossfaded
                     out = a if quiet else _xfade(a, b)
                     self.stats["dropped"] += 1
+                    if not quiet:
+                        self._since_force = 0
                 elif adjusting and err < 0 and (quiet or force):
-                    out = silence if quiet else _xfade(head, head, fade_out_only=True)   # play 10 ms extra
+                    if quiet:
+                        out = silence                            # 10 ms more pause: inaudible
+                    else:                                        # 10 ms dip: the head fades out now and is played
+                        out = _fade(head, out_=True)             # next, fading in (never a repeated block: buzz)
+                        buf[0] = _fade(head, out_=False)
+                        self._since_force = 0
                     self.stats["inserted"] += 1
                 else:
                     out = buf.popleft()
@@ -249,7 +263,10 @@ class AVSync:
         # laptop mic does not): saved per (input, audio source), re-measured by every sync test
         self.kind = f"{input_kind}|{input_name}|{monitor_source or '-'}"
         self.name, self.adjust_ms, self.log = input_name, adjust_ms, log
-        self.lat = collections.deque(maxlen=window_frames)   # ms, input arrival -> played
+        self.lat = collections.deque(maxlen=window_frames)   # ms, input arrival -> played (display)
+        # the audio follows the median of the last ~15 s: a stall of a few seconds (network, server) delays a
+        # minority of frames and leaves the audio alone, instead of a gap and a skip in the voice
+        self.lat_long = collections.deque(maxlen=window_frames * 3)
         self.chain_ms = load_chain().get(self.kind, {}).get("ms", 0)
         self.test = {"running": False}
         self._arrivals = None    # test: (t, brightness) at input arrival
@@ -265,13 +282,15 @@ class AVSync:
         if self._arrivals is not None:
             self._arrivals.append((t_arrival, _brightness(frame)))
 
-    def on_played(self, t_arrival, frame):
+    def on_played(self, t_arrival, frame, rec_frame=None):
         now = time.time()
         self.lat.append((now - t_arrival) * 1000)
-        if self._rec is not None and frame is not None and len(self._rec["frames"]) < 25 * 180:
+        self.lat_long.append(self.lat[-1])
+        rf = rec_frame if rec_frame is not None else frame
+        if self._rec is not None and rf is not None and len(self._rec["frames"]) < 25 * 180:
             import cv2
-            h, w = frame.shape[:2]
-            sm = cv2.resize(frame, (self._rec["width"], round(self._rec["width"] * h / w / 2) * 2))
+            h, w = rf.shape[:2]
+            sm = cv2.resize(rf, (self._rec["width"], round(self._rec["width"] * h / w / 2) * 2))
             self._rec["frames"].append((now, cv2.imencode(".jpg", sm, [cv2.IMWRITE_JPEG_QUALITY, 90])[1].tobytes()))
         if self._played is not None and frame is not None:
             import cv2
@@ -284,7 +303,8 @@ class AVSync:
         return l[len(l) // 2] if l else None
 
     def delay_ms(self):
-        p = self.pipeline_ms()
+        l = sorted(self.lat_long)
+        p = l[len(l) // 2] if l else None
         return None if p is None else max(0.0, p + self.chain_ms - PLAY_LATENCY_MS + self.adjust_ms)
 
     def status(self):
@@ -295,7 +315,7 @@ class AVSync:
                 "voice": self.monitor.voice.stats() if self.monitor and self.monitor.voice else None}
 
     # A/V recording: what you see (played frames) + what you hear (the delayed, possibly converted audio)
-    def record_av(self, path, width=480):
+    def record_av(self, path, width=480):  # width of the recorded frame (side by side: pass ~960)
         """Record from now until close() (max 3 min) and write an mp4 on one timeline, so the clip shows the real
         A/V sync of the live output."""
         if self.monitor is None:

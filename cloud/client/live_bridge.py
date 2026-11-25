@@ -71,6 +71,7 @@ p.add_argument("--voice-cmd", default=None, help="--voice: any converter command
                "(cloud/client/voice_stage.py) instead of the preset")
 p.add_argument("--record-av", default=None, help="--audio-monitor: record the played video + the delayed (converted) "
                "audio on one timeline to this mp4 (written at exit, max 3 min): shows the real A/V sync")
+p.add_argument("--record-av-sbs", action="store_true", help="--record-av: input | final output side by side")
 p.add_argument("--synctest-auto", type=float, default=None, help="(testing) start the A/V sync test N s after the start "
                "WITHOUT the flashing window: the input itself must contain flashes + beeps (tools/av_sync_selftest.sh)")
 p.add_argument("--no-camera-fix", action="store_true", help="don't lock the v4l2 camera's frame rate (by default the "
@@ -605,7 +606,7 @@ async def main():
                   log=blog, voice=voice)
     src.on_frame = sync.on_input
     if args.record_av:
-        sync.record_av(args.record_av)
+        sync.record_av(args.record_av, width=960 if args.record_av_sbs else 480)
     if args.synctest_auto is not None:
         sync.start_test(window=False, after_s=args.synctest_auto)
     stop = asyncio.Event()
@@ -667,7 +668,7 @@ async def main():
                     views["input"] = frame
                     if ff is not None:
                         ff.add_input(seq + 1, frame)
-                    if sess["review"] is not None:
+                    if sess["review"] is not None or args.record_av_sbs:
                         sent_cache[seq + 1] = frame
                         while len(sent_cache) > 300:
                             sent_cache.popitem(last=False)
@@ -955,7 +956,12 @@ async def main():
                                 last = last_raw
                         if tcap:
                             lat.append(time.time() * 1000 - tcap)
-                            sync.on_played(tcap / 1000, last)
+                            rec = None
+                            if args.record_av_sbs and last is not None:
+                                inp = sent_cache.get(last_seq)
+                                rec = np.hstack([inp if inp is not None and inp.shape == last.shape
+                                                 else np.zeros_like(last), last])
+                            sync.on_played(tcap / 1000, last, rec)
                         stats["played"] += 1
                     else:
                         stats["repeated"] += 1

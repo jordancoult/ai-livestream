@@ -44,6 +44,27 @@ CHAIN_FILE = TMP / "av_chain.json"
 CLIP = Path.home() / "Videos" / "ai-livestream-tests" / "av-sync-test.mp4"
 SR, BLOCK = 48000, 480   # 10 ms audio blocks
 PLAY_LATENCY_MS = 30     # pacat --latency-msec
+DEADBAND_BLOCKS = 3      # monitor: delay errors below 30 ms are left alone (no audible correction)
+FORCE_BLOCKS = 8         # ... above 80 ms they are corrected even mid-speech (crossfaded)
+JUMP_BLOCKS = 50         # ... above 500 ms (start, pipeline restart) it snaps at once
+QUIET_RMS = 0.004        # ... otherwise only in pauses (block RMS below about -48 dBFS)
+
+
+def _rms(b):
+    x = np.frombuffer(b, np.int16).astype(np.float32) / 32768
+    return float(np.sqrt((x * x).mean()))
+
+
+def _xfade(a, b, fade_out_only=False):
+    """One 10 ms block: a fading out into b fading in (equal power). fade_out_only: a fading to silence and back in
+    over the block (used to stretch by 10 ms mid-speech)."""
+    x = np.frombuffer(a, np.int16).astype(np.float32)
+    w = np.sin(np.linspace(0, np.pi / 2, len(x), dtype=np.float32))
+    if fade_out_only:
+        env = np.abs(np.cos(np.linspace(0, np.pi, len(x), dtype=np.float32)))
+        return (x * env).astype(np.int16).tobytes()
+    y = np.frombuffer(b, np.int16).astype(np.float32)
+    return np.clip(x * w[::-1] + y * w, -32768, 32767).astype(np.int16).tobytes()
 TEST_S = 15
 
 
@@ -57,6 +78,8 @@ class AudioMonitor:
         self.source, self.get_delay_ms, self.voice = source, get_delay_ms, voice
         self.stop = threading.Event()
         self.stats = {"delay_ms": None, "dropped": 0, "inserted": 0}
+        self._adjusting = False
+        self._smooth = None
         self.mute = False       # sync test: keep timing, play silence (no speaker -> mic feedback loop)
         self.record = None      # sync test: list -> (write time, block) of what is played
         self.record_in = None   # sync test: list -> (capture time, block) as captured (undelayed)
@@ -69,8 +92,16 @@ class AudioMonitor:
         self.play = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1",
                                       f"--latency-msec={PLAY_LATENCY_MS}", "--stream-name=bridge-monitor"],
                                      stdin=subprocess.PIPE)
-        threading.Thread(target=self._run, daemon=True).start()
+        threading.Thread(target=self._run_logged, daemon=True).start()
         return self
+
+    def _run_logged(self):
+        try:
+            self._run()
+        except Exception:  # noqa: BLE001  -- never die silently: the audio would just stop
+            import traceback
+            print("[av_sync] audio monitor crashed:\n" + traceback.format_exc(), flush=True)
+            self.stats["crashed"] = True
 
     def _run(self):
         """Delay accounting in 10 ms blocks: queued here + inside the voice stage (if any, incl. its algorithmic
@@ -100,18 +131,47 @@ class AudioMonitor:
                 while len(buf) > 300:
                     buf.popleft()
                 continue
-            target_blocks = max(1, int(target / 10))
-            self.stats["delay_ms"] = round(target)
+            # smooth the target (time constant ~2 s): the pipeline median wobbles by a frame now and then; the
+            # audio follows real changes, not the wobble
+            sm = target if self._smooth is None or abs(target - self._smooth) > JUMP_BLOCKS * 10 else \
+                self._smooth + (target - self._smooth) * 0.005
+            self._smooth = sm
+            target_blocks = max(1, int(round(sm / 10)))
+            self.stats["delay_ms"] = round(sm)
             have = len(buf) + in_stage
-            if have < target_blocks - 1 or not buf:   # too little delay: 10 ms of silence, let the buffer grow
+            err = int(round(have - target_blocks))   # + = too much delay (drop), - = too little (insert)
+            if err > JUMP_BLOCKS:                # first measurement or a big jump: snap at once
+                for _ in range(err):
+                    if len(buf) > 1:
+                        buf.popleft()
+                self.stats["dropped"] += err
+                err = 0
+            if not buf or err < -JUMP_BLOCKS:    # nothing to play yet, or far too little delay: silence
                 out = silence
                 self.stats["inserted"] += 1
             else:
-                while len(buf) > 1 and have > target_blocks + 1:   # too much: drop the oldest 10 ms
-                    buf.popleft()
-                    have -= 1
+                # Follow the pipeline without audible cuts: ignore wobbles below DEADBAND (the median moves by a
+                # frame or two), correct during pauses (a dropped or repeated silent block is inaudible), and only a
+                # large error is corrected mid-speech, crossfaded. One 10 ms correction per block at most.
+                if abs(err) >= DEADBAND_BLOCKS:
+                    adjusting = True
+                elif abs(err) <= 1:
+                    adjusting = False
+                else:
+                    adjusting = self._adjusting
+                self._adjusting = adjusting
+                head = buf[0]
+                quiet = _rms(head) < QUIET_RMS
+                force = abs(err) >= FORCE_BLOCKS
+                if adjusting and err > 0 and len(buf) > 1 and (quiet or force):
+                    a, b = buf.popleft(), buf.popleft()          # two blocks -> one, crossfaded
+                    out = a if quiet else _xfade(a, b)
                     self.stats["dropped"] += 1
-                out = buf.popleft()
+                elif adjusting and err < 0 and (quiet or force):
+                    out = silence if quiet else _xfade(head, head, fade_out_only=True)   # play 10 ms extra
+                    self.stats["inserted"] += 1
+                else:
+                    out = buf.popleft()
             try:
                 if self.record is not None:
                     self.record.append((time.time(), out))
@@ -311,11 +371,15 @@ class AVSync:
         out = Path(out)
         out.parent.mkdir(parents=True, exist_ok=True)
         t0 = max(played[0][0], audio[0][0]); t1 = min(played[-1][0], audio[-1][0])
+        # the audio as played: one continuous stream (blocks back to back, as pacat got them), anchored at the
+        # first block's time; placing each block at its own jittery timestamp would cut gaps and overlaps
+        i0 = int(round((audio[0][0] + PLAY_LATENCY_MS / 1000 - t0) * SR))
+        stream = np.frombuffer(b"".join(b for _, b in audio), np.int16)
         pcm = np.zeros(int((t1 - t0) * SR) + SR, np.int16)
-        for t, b in audio:
-            i, x = int((t + PLAY_LATENCY_MS / 1000 - t0) * SR), np.frombuffer(b, np.int16)
-            if 0 <= i < len(pcm) - len(x):
-                pcm[i:i + len(x)] = x
+        if i0 < 0:
+            stream, i0 = stream[-i0:], 0
+        n = min(len(stream), len(pcm) - i0)
+        pcm[i0:i0 + n] = stream[:n]
         TMP.mkdir(exist_ok=True)
         wav = TMP / "synctest.wav"
         with wave.open(str(wav), "wb") as w:

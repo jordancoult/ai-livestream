@@ -682,6 +682,16 @@ async def main():
     t_end = time.time() + args.seconds if args.seconds else None
 
     quit_ev = asyncio.Event()                 # the user (or --seconds) ends the run; a dropped connection reconnects
+    stops = []                                # every session's stop event (a stop request ends the current one)
+
+    def request_stop():                       # SIGTERM / SIGINT: the same clean end as --seconds (recordings, RESULT)
+        print("[bridge] stop requested", flush=True)
+        quit_ev.set()
+        for ev in stops:
+            ev.set()
+    import signal as _signal
+    for _sig in (_signal.SIGTERM, _signal.SIGINT):
+        asyncio.get_running_loop().add_signal_handler(_sig, request_stop)
     ctl = asyncio.Queue()                     # commands from the terminal and the dashboard (outlive a session)
     loop = asyncio.get_running_loop()
     views = {}                                # dashboard live views: latest input / JoyAI / final frame
@@ -690,6 +700,7 @@ async def main():
     while not quit_ev.is_set():
       try:
         stop = asyncio.Event()                # this session
+        stops.append(stop)
         async with websockets.connect(args.url, max_size=64 * 2**20, ping_interval=20) as ws:
             await ws.send(json.dumps(start))
             while True:
@@ -1172,8 +1183,7 @@ async def main():
 if __name__ == "__main__":
     import signal
     # Ctrl+C also when started in the background by a script (bash ignores SIGINT there); SIGTERM = the same clean stop
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-    signal.signal(signal.SIGTERM, signal.default_int_handler)
+    signal.signal(signal.SIGINT, signal.default_int_handler)   # until the event loop installs its own handlers
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

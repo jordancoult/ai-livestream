@@ -129,7 +129,10 @@ def main():
                  "--expressiveness", str(conv.get("expressiveness", 1.0)), "--mic", a.mic,
                  "--max-seconds", str(a.max_seconds)])
         procs.append(drv)
-        drv.wait()
+        try:   # the clip streamer can hang on closing its SRT connection after the clip: don't wait for it
+            drv.wait(timeout=a.seconds + 10 if a.test else None)
+        except subprocess.TimeoutExpired:
+            drv.terminate()
         time.sleep(3)
     except KeyboardInterrupt:
         pass
@@ -138,7 +141,7 @@ def main():
             if p.poll() is None:
                 p.send_signal(signal.SIGTERM)
                 try:
-                    p.wait(30)
+                    p.wait(180)   # the bridge writes the --out recording at exit (~1 s per 2 s of video)
                 except subprocess.TimeoutExpired:
                     p.kill()
         for m in mods:

@@ -20,8 +20,9 @@
     "service": "nuance_live",
     "persona_id": "mira",
     "personality_file": "characters/karen/personality.md",
-    "first_line": "Say hi to your viewers and introduce yourself.",
+    "first_line": "Greet the applicant with brisk corporate courtesy, introduce yourself as Karen and the company you are screening for, and ask your first interview question.",
     "expressiveness": 1.0,
-    "test_clip": "assets/nuance_mira_100s.mp4"
+    "test_clip": "assets/nuance_mira_100s.mp4",
+    "personality_source": "condensed (2.5k chars) from the user's full Karen character brief (9 TikTok transcripts), not stored here"
   }
 }

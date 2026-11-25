@@ -367,7 +367,7 @@ class LPPass:
     def __init__(self, mode="rel", gains=None, base_ema=0.08,
                  neutral_ema=0.01, fade=0.25, drv_smooth=0.0, euro=DEFAULT_EURO, yaw_gate=(30.0, 45.0), pitch_gate=(20.0, 35.0),
                  pose=False, limits=None, drv_yaw_gate=(25.0, 40.0), drv_pitch_gate=(18.0, 30.0), visibility=True,
-                 cover_gate=(0.55, 0.35), score_gate=(0.65, 0.5), cover_hold=6):
+                 cover_gate=(0.55, 0.35), score_gate=(0.65, 0.5), cover_hold=6, drv_hold=12, src_hold=2):
         global DET_STREAM
         DET_STREAM = DET_STREAM or torch.cuda.Stream()
         with torch.cuda.stream(DET_STREAM):  # the wrappers capture the current stream at construction
@@ -383,6 +383,11 @@ class LPPass:
         self.gains = dict(DEFAULT_GAINS[mode])
         self.set_gain(**(gains or {}))
         self.base_ema, self.neutral_ema, self.fade, self.drv_smooth = base_ema, neutral_ema, fade, drv_smooth
+        # detection outages: frames a lost driver face keeps its last expression / a lost generated face its last
+        # analysis (12 = ~0.5 s; the generated face moves, so its hold is short)
+        self.drv_hold, self.src_hold = drv_hold, src_hold
+        self._last_drv = self._last_s = None
+        self._drv_lost = self._src_lost = 0
         self.set_euro(euro)
         self.show_meters, self.meters = False, {}  # live per-region motion values (live_test overlay)
         self.yaw_gate, self.pitch_gate = yaw_gate, pitch_gate
@@ -621,6 +626,8 @@ class LPPass:
             self.base_out = self.neutral_in = self.exp_in = self.pose_s = self.drv0 = self.pitch0 = None
             self.clear_frames, self.gate_info = 99, {}
             self.w, self.timing = 0.0, {}
+            self._last_drv = self._last_s = None
+            self._drv_lost = self._src_lost = 0
 
     def driver(self):
         d = Driver(self.detector, visibility=self.use_vis)
@@ -649,12 +656,29 @@ class LPPass:
         t0 = time.perf_counter()
         if s is _UNSET:
             s = self.analyze(out_bgr)
+        # Detection outages never cut to the raw frame (that flashes): a lost driver face keeps its last expression
+        # for up to drv_hold frames, a lost generated face its last analysis for up to src_hold frames; past that
+        # the effect fades out (w) like any gate. (Before 2026-11-25 a one-frame loss, and every re-detection frame,
+        # showed the raw JoyAI frame: the flicker in the Karen tests.)
+        held = []
+        if drv is None and self._last_drv is not None and self._drv_lost < self.drv_hold:
+            drv, self._drv_lost = self._last_drv, self._drv_lost + 1
+            held.append("drv")
+        elif drv is not None:
+            self._last_drv, self._drv_lost = drv, 0
+        if s is None and self._last_s is not None and self._src_lost < self.src_hold:
+            s, self._src_lost = self._last_s, self._src_lost + 1
+            held.append("src")
+        elif s is not None:
+            self._last_s, self._src_lost = s, 0
+        fading = False   # past the holds: render with the last face/expression while w fades to 0, then pass through
+        if (s is None or drv is None) and self.w > 0 and self._last_s is not None and self._last_drv is not None:
+            s = s if s is not None else self._last_s
+            drv = drv if drv is not None else self._last_drv
+            fading = True
         ok = s is not None and drv is not None
-        if self.src.detected_now:  # detection (~23 ms) already used this frame's budget: pass through, render next
-            info = {"ok": False, "w": self.w, "skipped": "detect"}
-            return out_bgr, info
         target = 0.0
-        if ok:  # pose gate on the generated face: a frontal re-render warps profile views
+        if ok and not fading:  # pose gate on the generated face: a frontal re-render warps profile views
             yaw, pitch = abs(float(s["yaw"])), abs(float(s["pitch"]))
             self.pose_s = (yaw, pitch) if self.pose_s is None else \
                 tuple(0.6 * p + 0.4 * v for p, v in zip(self.pose_s, (yaw, pitch)))  # no flicker at the threshold
@@ -665,7 +689,11 @@ class LPPass:
         self.w = min(target, self.w + self.fade) if target > self.w else max(target, self.w - fade_out)
         ok = ok and self.w > 0
         info = {"ok": ok, "w": self.w, **self.gate_info}
-        if not ok:  # no face on one side: pass JoyAI through
+        if held:
+            info["held"] = held
+        if self.src.detected_now:
+            info["detected"] = True
+        if not ok:  # no face on one side (past the holds) and faded out: pass JoyAI through
             return out_bgr, info
         t0 = self._t("src", t0, profile)
         # slow anchors (GPU)

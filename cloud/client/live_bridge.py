@@ -541,7 +541,7 @@ class FaceFixer:
             t0 = time.perf_counter()
             res, info = self.lp.render(out, fd.result())
             self.ms.append(1000 * (time.perf_counter() - t0))
-            job["info"] = {k: info.get(k) for k in ("ok", "w")}
+            job["info"] = {k: info.get(k) for k in ("ok", "w", "held", "detected") if info.get(k) is not None}
             return res
         if fd.done():
             job["fut"] = self.pool_gpu.submit(render)

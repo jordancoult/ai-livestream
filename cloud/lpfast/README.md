@@ -173,3 +173,22 @@ Disk: TensorRT 11 libs ~6.3 GB in the venv, ONNX ~0.7 GB, engines ~0.6 GB.
   real clip (glasses held over the mouth), not yet on your webcam.
 - Not yet run against the real 5090 server (validated through the bridge with `cloud/facefix/mock_server.py`
   replaying a recorded 5090 run at its chunk rhythm).
+
+## Live robustness: no flicker (2026-11-25)
+The face pass used to "disengage" for single frames live (a raw JoyAI frame between refined ones: the mouth/eyes
+jump). Causes and fixes, measured with `tools/joyai_standin.py` (replays a recorded JoyAI run with JoyAI's 8-frame
+burst timing + network stalls, so the bridge can be tested without a GPU box):
+- **Late frames spiral.** The pass renders at ~36 ms/frame, about the play rate, so it has no headroom: after a
+  network burst every frame stayed late (old: 39-65% of frames refined, 24 raw flicker episodes per 45 s). Now:
+  a late frame gets the last rendered face pasted at its own face position (`patch_last`, ~2 ms) instead of the raw
+  frame; a miss cancels the next unstarted render so the pass gets ahead again; renders that can't make their
+  deadline are skipped; after the play queue runs dry it refills 2 frames before playing on; with the face pass the
+  player catches up by a gentle speed-up (at most the render rate) plus skipping surplus frames after bursts instead
+  of playing 1.25x faster; analysis of the next frame overlaps the current render.
+- **Detection outages** (driver or generated face lost for a frame, re-detection frames) cut to the raw frame. Now
+  the last expression / face is held (12 / 2 frames) and the effect fades out past that.
+Result, realistic network profile (a stall every ~10 s): 94-97% refined, the rest patched in runs of <= 2 frames,
+0 raw frames; clean network 99-100% refined. Glass-to-glass about the same (+0-100 ms run to run).
+Bridge flags (defaults = the fix): `--facefix-patch 1`, `--facefix-catchup drop`, `--rebuffer` (2 with a face pass),
+`--facefix-wait-running 15`, `--facefix-blend-back 3`, `--facefix-serial` (old non-overlapped pass); `--save-input`
+JSON now logs per-frame `shown` (refined/patched/held/raw) and the server's frame `arrivals`.

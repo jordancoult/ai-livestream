@@ -118,6 +118,18 @@ p.add_argument("--audio-source", default="default", help="--face-driver audio: P
 p.add_argument("--audio-face", default=None, help="--face-driver audio: a human face image that conditions Ditto's "
                "motion (default: your first webcam frame)")
 p.add_argument("--facefix-wait", type=float, default=15, help="ms the player waits for a late refined frame")
+p.add_argument("--facefix-wait-running", type=float, default=15, help="ms the player waits for a refined frame "
+               "whose render is already running (a miss shows a held or raw frame: visible)")
+p.add_argument("--facefix-blend-back", type=int, default=3, help="frames to blend from raw back to refined after a "
+               "run of misses (0 = cut)")
+p.add_argument("--facefix-serial", action="store_true", help="face pass without the analysis/render overlap "
+               "(the pre-2026-11-25 behaviour, for comparison)")
+p.add_argument("--facefix-patch", type=int, default=1, help="1: a late refined frame is replaced by the last "
+               "rendered face pasted at the frame's own face position (no raw flash, no freeze); 0: hold / raw")
+p.add_argument("--rebuffer", type=int, default=None, help="after the play queue runs dry, wait for this many "
+               "frames before playing on (default 2 with a face pass, 0 without = old behaviour)")
+p.add_argument("--facefix-catchup", default="drop", choices=["drop", "speed"], help="with the face pass, how "
+               "the player catches up after a burst: skip surplus frames (default) or play up to 1.25x faster (old)")
 p.add_argument("--facefix-hold", type=int, default=2, help="on a miss, repeat the last refined frame if it is at "
                "most this many frames old (instead of popping to the raw frame)")
 p.add_argument("--facefix-extra", default="", help="more facefix.py flags, e.g. '--yaw-hi 45 --no-hands'")
@@ -465,6 +477,12 @@ class FaceFixer:
         import gc
         from lp_pass import LPPass  # lazy: needs cloud/facefix/.venv (torch, TensorRT 11) + engines (lpfast/README)
         self.pool_in, self.pool_gpu = ThreadPoolExecutor(1), ThreadPoolExecutor(1)
+        # two-stage pipeline: the next JoyAI frame's analysis (face track + motion, ~11 ms) runs while the current
+        # frame renders (warp ~23 ms): ~37 -> ~25 ms per frame, i.e. headroom to catch up after a network burst
+        # instead of a spiral of late frames (2026-11-25)
+        self.pool_an = ThreadPoolExecutor(1) if not args.facefix_serial else None
+        self.playing_seq = None   # source_seq of the frame the player is showing now (deadline checks)
+        self.jobs = collections.OrderedDict()   # seq -> job (a miss cancels the next unstarted render)
         self.inputs = collections.OrderedDict()          # seq -> future of the driver analysis
         self.stats = collections.Counter()
         self.last_info = None
@@ -532,14 +550,35 @@ class FaceFixer:
         if fd is None:
             self.stats["no_input"] += 1
             return None
-        job = {"cancel": False}
+        an = self.pool_an.submit(self.lp.analyze, out) if self.pool_an is not None else None
+        job = {"cancel": False, "an": an, "out": out, "seq": seq, "t_sub": time.time()}
+        self.jobs[seq] = job
+        while len(self.jobs) > 64:
+            self.jobs.popitem(last=False)
 
         def render():
             if job["cancel"]:
                 self.stats["skipped_late"] += 1
                 return None
+            # deadline check (breaks the late-frame spiral after a network burst): a render that cannot finish
+            # before its frame is shown is skipped, so the GPU moves on to frames it can still make; the skipped
+            # frame gets the patched face (patch_last)
+            if args.facefix_patch and self.playing_seq is not None and self.pool_an is not None:
+                ms = sorted(self.ms)
+                est = ms[len(ms) // 2] if ms else 36.0
+                budget = (seq - self.playing_seq) * 1000 / args.play_fps + args.facefix_wait
+                if budget < est:
+                    job["cancel"] = True
+                    self.stats["skipped_deadline"] += 1
+                    return None
+            job["started"] = True
             t0 = time.perf_counter()
-            res, info = self.lp.render(out, fd.result())
+            job["t_start"] = time.time()
+            if an is not None:
+                res, info = self.lp.render(out, fd.result(), s=an.result())
+            else:
+                res, info = self.lp.render(out, fd.result())
+            job["t_done"] = time.time()
             self.ms.append(1000 * (time.perf_counter() - t0))
             job["info"] = {k: info.get(k) for k in ("ok", "w", "held", "detected") if info.get(k) is not None}
             return res
@@ -574,6 +613,26 @@ class FaceFixer:
             print("[bridge] facefix error:", repr(f.exception()), flush=True)
         job["cancel"] = True
         self.stats["miss"] += 1
+        if args.facefix_patch:
+            # break the chain: the face pass renders at about the play rate, so once one frame is late every
+            # following one would be too; skipping the next unstarted render (it gets patched) puts it ahead again
+            for sq, j in self.jobs.items():
+                if sq > job.get("seq", 0) and not j.get("started") and not j["cancel"]:
+                    j["cancel"] = True
+                    self.stats["skipped_chain"] += 1
+                    break
+        dbg = {"started": bool(job.get("started")), "pend": self.pool_gpu._work_queue.qsize()}   # per-frame log
+        an = job.get("an")
+        if args.facefix_patch and an is not None and an.done() and an.exception() is None:
+            try:
+                res = self.lp.patch_last(job["out"], an.result())
+            except Exception as e:  # noqa: BLE001
+                res = None
+                print("[bridge] facefix patch error:", repr(e), flush=True)
+            if res is not None:
+                self.stats["patched"] += 1
+                self.last_info = {"patched": True, **dbg}
+                return res
         return None
 
 
@@ -657,6 +716,7 @@ async def main():
             review = FileWriter(args.review, 3 * w, h, args.play_fps) if args.review else None
             sess["review"] = review
             recv_times = collections.deque(maxlen=200)
+            arrivals = []
             saved_in = FileWriter(args.save_input, w, h, args.fps) if args.save_input else None
             played_seq, played_ff = [], []
             sent_cache = collections.OrderedDict()           # seq -> frame as sent (for --review)
@@ -731,6 +791,8 @@ async def main():
                         continue
                     received += 1
                     recv_times.append(time.time())
+                    if args.save_input:   # real server timing (source_seq, arrival) for tools/joyai_standin.py --timing
+                        arrivals.append(((meta or {}).get("source_seq"), round(time.time(), 4)))
                     await ws.send(json.dumps({"type": "ack", "recv": received}))
                     for fr in frames:
                         img = fr.to_ndarray(format="bgr24")
@@ -935,9 +997,16 @@ async def main():
             async def player():
                 last, last_raw, last_seq = None, None, None
                 last_ref, last_ref_n = None, -99
+                raw_run, blend_k, shown = False, 0, None
                 started = False
                 next_t = None
                 n = 0
+                # after an underrun (network stall) resume only once `rebuf_n` frames are queued (max 0.3 s): playing
+                # each frame the moment it arrives leaves the face pass no time to render it, and the queue never
+                # refills, so every frame stays late (seen 2026-11-25: 44-70% late frames after stalls)
+                rebuf_n = args.rebuffer if args.rebuffer is not None else (2 if ff is not None else 0)
+                rebuf_until = None
+                q_hist = collections.deque(maxlen=12)
                 while not stop.is_set():
                     if not started:
                         if len(queue) >= args.buffer:
@@ -945,25 +1014,47 @@ async def main():
                         else:
                             await asyncio.sleep(0.005)
                             continue
-                    if queue:
+                    if rebuf_until is not None and len(queue) < rebuf_n and time.time() < rebuf_until:
+                        hold_play = True
+                    else:
+                        hold_play, rebuf_until = False, None
+                    if queue and not hold_play:
                         last_raw, tcap, job, last_seq = queue.popleft()
+                        if ff is not None and last_seq:
+                            ff.playing_seq = last_seq
                         last = last_raw
                         if ff is not None and not sess["ff_on"]:
                             if job is not None:
                                 job["cancel"] = True
                         elif ff is not None:
                             if job is not None and not job["fut"].done():     # give the GPU a few ms
-                                t_dead = time.time() + args.facefix_wait / 1000
+                                # a render already on the GPU gets up to a frame period (it finishes within ~37
+                                # ms; showing the raw frame instead flashes); a queued one the short wait
+                                wait = args.facefix_wait_running if job.get("started") else args.facefix_wait
+                                t_dead = time.time() + wait / 1000
                                 while not job["fut"].done() and time.time() < t_dead:
                                     await asyncio.sleep(0.002)
                             last = ff.take(job)
+                            shown = "patched" if (ff.last_info or {}).get("patched") else "refined"
                             if last is not None:
+                                if raw_run and args.facefix_blend_back > 0:   # back from raw frames: blend in
+                                    a_ = min(1.0, blend_k / args.facefix_blend_back)
+                                    blend_k += 1
+                                    if a_ < 1.0:
+                                        last = cv2.addWeighted(last, a_, last_raw, 1 - a_, 0)
+                                        shown = "blend"
+                                    else:
+                                        raw_run = False
                                 last_ref, last_ref_n = last, n
                             elif last_ref is not None and n - last_ref_n <= args.facefix_hold:
                                 last = last_ref                    # hold the previous refined frame: a raw frame
                                 ff.stats["held"] += 1              # between refined ones pops the mouth
+                                shown = "held"
                             else:
                                 last = last_raw
+                                shown = "raw"
+                                raw_run, blend_k = True, 1
+                                ff.stats["raw"] += 1
                         if tcap:
                             lat.append(time.time() * 1000 - tcap)
                             rec = None
@@ -975,11 +1066,14 @@ async def main():
                         stats["played"] += 1
                     else:
                         stats["repeated"] += 1
+                        if not queue and rebuf_n and rebuf_until is None:
+                            rebuf_until = time.time() + 0.3
                     if last is not None and last.shape[1::-1] == sess["sink_wh"]:
                         sess["sink"].write(last)
                         views["joyai"], views["final"] = last_raw, last
                         played_seq.append(last_seq)
-                        played_ff.append(ff.last_info if ff is not None else None)   # None = raw frame (miss/off)
+                        played_ff.append(({**(ff.last_info or {}), "shown": shown} if ff is not None and sess["ff_on"]
+                                          else None))   # shown: refined / held / raw / blend
                         if sess["review"] is not None:
                             inp = sent_cache.get(last_seq)
                             sess["review"].write(np.hstack([inp if inp is not None else np.zeros_like(last), last_raw, last]))
@@ -987,6 +1081,29 @@ async def main():
                     # adaptive rate: keep the queue near the target (one chunk) so latency doesn't creep up
                     err = len(queue) - args.buffer
                     speed = 1.0 + max(-0.25, min(0.25, 0.05 * err))
+                    if ff is not None and sess["ff_on"] and args.facefix_catchup == "drop":
+                        # with the face pass, catch up by skipping surplus frames (cancel their renders) instead of
+                        # playing faster than it can render: faster play keeps every frame late for seconds (frozen
+                        # expressions); a skipped frame is a one-frame jump (2026-11-25)
+                        # the steady surplus (JoyAI ~26 fps vs 25 played) by a gentle speed-up the face pass can
+                        # still render; only a real burst by skipping frames
+                        ms_ = sorted(ff.ms) or [36.0]
+                        speed = min(speed, max(1.0, 0.97 * 1000 / (args.play_fps * ms_[len(ms_) // 2])))
+                        # JoyAI's 8-frame bursts make the queue jump on every chunk: judge the surplus by the
+                        # queue's low point over the last ~0.5 s (what is left just before a burst), skip one frame
+                        # per tick while it stays above the target
+                        q_hist.append(len(queue))
+                        if len(q_hist) == q_hist.maxlen and min(q_hist) > args.buffer + 1 and len(queue) > 1:
+                            old = queue.popleft()
+                            if old[2] is not None:
+                                old[2]["cancel"] = True
+                            stats["catchup_drop"] += 1
+                            q_hist.clear()
+                        while len(queue) > args.buffer + 10:     # several bursts at once (after a stall): now
+                            old = queue.popleft()
+                            if old[2] is not None:
+                                old[2]["cancel"] = True
+                            stats["catchup_drop"] += 1
                     next_t = max(next_t + 1.0 / (args.play_fps * speed), time.time() - 0.1)
                     await asyncio.sleep(max(0.0, next_t - time.time()))
                     if n % int(args.play_fps * 10) == 0 and ui.get("stats", True):
@@ -1025,7 +1142,7 @@ async def main():
                         wr.close()
                 if args.save_input:
                     with open(str(Path(args.save_input).with_suffix(".json")), "w") as f:
-                        json.dump({"source_seq": played_seq, "facefix": played_ff}, f)
+                        json.dump({"source_seq": played_seq, "facefix": played_ff, "arrivals": arrivals}, f)
       except (websockets.exceptions.WebSocketException, OSError, asyncio.TimeoutError) as e:
         if quit_ev.is_set() or args.no_reconnect:
             raise

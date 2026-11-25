@@ -65,6 +65,7 @@ def main():
     ap.add_argument("--url", default="ws://127.0.0.1:18080/ws")
     ap.add_argument("--dashboard", type=int, default=8765)
     ap.add_argument("--no-face-pass", action="store_true")
+    ap.add_argument("--no-voice", action="store_true", help="plain persona voice (no conversion)")
     ap.add_argument("--bridge-args", default="", help="extra live_bridge.py flags")
     a = ap.parse_args()
     c = load_character(a.character)
@@ -84,10 +85,10 @@ def main():
               "--portrait", "--ref", str(REPO / c["appearance"]["reference"]),
               "--prompt", (REPO / c["appearance"]["prompt_file"]).read_text().strip(),
               "--audio-monitor", "--monitor-source", "char_audio.monitor",
-              "--voice", v["kind"], "--voice-model", str(REPO / v["model"]), "--voice-pitch", str(v["pitch"]),
+              "--voice", "off" if a.no_voice else v["kind"], "--voice-model", str(REPO / v["model"]), "--voice-pitch", str(v["pitch"]),
               "--voice-index-rate", str(v["index_rate"]), "--voice-block-ms", str(v["block_ms"]),
               "--seconds", str(int(run_s + 40))]
-    if a.voice_host:
+    if a.voice_host and not a.no_voice:
         bridge += ["--voice-host", a.voice_host]
     if not a.no_face_pass:
         bridge += ["--facefix-preset", c["face_pass"]["lpfast_preset"]]

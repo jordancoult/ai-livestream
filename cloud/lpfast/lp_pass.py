@@ -388,6 +388,7 @@ class LPPass:
         self.drv_hold, self.src_hold = drv_hold, src_hold
         self._last_drv = self._last_s = None
         self._drv_lost = self._src_lost = 0
+        self._last_crop = None
         self.set_euro(euro)
         self.show_meters, self.meters = False, {}  # live per-region motion values (live_test overlay)
         self.yaw_gate, self.pitch_gate = yaw_gate, pitch_gate
@@ -731,10 +732,20 @@ class LPPass:
         x_d[..., :2] += d[:, 63:65].view(1, 1, 2)
         x_d = x_s + (x_d - x_s) * self.w
         crop = self.warp.run(feature_3d=s["f"], kp_driving=x_d, kp_source=x_s)["out"]  # 1x3x512x512 RGB 0..1
+        self._last_crop = crop.clone()   # for patch_last (the engine reuses its output buffer)
         t0 = self._t("warp", t0, profile)
         res = self._paste(out_bgr, crop, s["M_c2o"])
         self._t("paste", t0, False)
         return res, info
+
+    def patch_last(self, out_bgr, s):
+        """A late frame's stand-in: the last rendered face pasted onto THIS frame at its own face position (from
+        `analyze`, cheap) instead of a full render (~2-4 ms vs ~35). Head motion stays live, the expression is a
+        frame or two old: no flash to the raw frame, no frozen picture. None if there is nothing to paste."""
+        crop = self._last_crop
+        if crop is None or s is None or self.w <= 0:
+            return None
+        return self._paste(out_bgr, crop, s["M_c2o"])
 
     def _paste(self, frame, crop, M_c2o):
         """Blend the 512 render into the frame inside the face ROI only (GPU grid_sample, one download)."""

@@ -1203,9 +1203,17 @@ async def main():
                     await asyncio.sleep(1.0)
                     if ff is None or not sess["ff_on"] or sess["state"] != "running":
                         continue
+                    if getattr(ff.lp, "need_recal", False):   # ~1 s of broken renders: fresh face reference
+                        ff.lp.need_recal = False
+                        ff.drv.reset()
+                        print("[facefix] renders kept failing the quality check: re-taking the face reference",
+                              flush=True)
                     w, g = float(ff.lp.w), dict(ff.lp.gate_info)
+                    if g.get("q_blocked"):
+                        w = 0.0                               # showing JoyAI's frame (quality gate)
                     if w < 0.5:
                         why = [f"no {g['no_face']} face"] if g.get("no_face") else []
+                        why += [f"render quality {g.get('quality')} (showing JoyAI)"] if g.get("q_blocked") else []
                         why += [f"{k}={g.get(v)}" for k, v, gk in (("your yaw", "drv_yaw", "g_pose"),
                                 ("your pitch", "drv_pitch_rel", "g_pose"), ("mouth visible", "mouth_vis", "g_cover"),
                                 ("face score", "face_score", "g_score"), ("character yaw", "src_yaw", "g_src"),

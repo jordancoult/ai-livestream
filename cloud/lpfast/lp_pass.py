@@ -781,7 +781,52 @@ class LPPass:
         t0 = self._t("warp", t0, profile)
         res = self._paste(out_bgr, crop, s["M_c2o"])
         self._t("paste", t0, False)
-        return res, info
+        return self._quality_gate(out_bgr, res, s["M_c2o"], info), info
+
+    # ---- output quality gate: never show a broken render -------------------------------------------------------
+    Q_BAD = 0.86        # face-area similarity (render vs JoyAI frame) below this = broken (calibrated 2026-11-26
+                        # on a replayed Karen session: clean 0.918-0.95; a skewed face reference 0.857-0.90 (mild
+                        # distortion); the live "mush" far lower)
+    Q_BACK = 3          # good frames in a row before it comes back (then a 4-frame crossfade)
+    Q_RECAL = 25        # bad frames in a row (~1 s) -> ask for a fresh face reference (need_recal; the bridge acts)
+
+    def _quality(self, a, b, M_c2o):
+        """Normalized correlation of the face area (48x48 gray) between the JoyAI frame and the render: expression
+        changes (mouth, eyes) keep it high; a scrambled / smeared face drops it."""
+        H, W = a.shape[:2]
+        c = np.array([[96, 96, 1], [416, 96, 1], [96, 416, 1], [416, 416, 1]], np.float64) @ M_c2o[:2].T
+        x0, y0 = np.clip(np.floor(c.min(0)).astype(int), 0, [W, H])
+        x1, y1 = np.clip(np.ceil(c.max(0)).astype(int), 0, [W, H])
+        if x1 - x0 < 16 or y1 - y0 < 16:
+            return 1.0
+        g = [cv2.resize(cv2.cvtColor(np.ascontiguousarray(x[y0:y1, x0:x1]), cv2.COLOR_BGR2GRAY), (48, 48),
+                        interpolation=cv2.INTER_AREA).astype(np.float32).ravel() for x in (a, b)]
+        g = [x - x.mean() for x in g]
+        return float((g[0] @ g[1]) / (np.sqrt((g[0] @ g[0]) * (g[1] @ g[1])) + 1e-6))
+
+    def _quality_gate(self, raw, res, M_c2o, info):
+        q = self._quality(raw, res, M_c2o)
+        st = self.__dict__.setdefault("_qs", {"bad": 0, "good": 99, "a": 1.0, "blocked": False, "rejected": 0})
+        if q < self.Q_BAD:
+            st["bad"], st["good"] = st["bad"] + 1, 0
+            st["blocked"], st["a"] = True, 0.0
+            st["rejected"] += 1
+            if st["bad"] == self.Q_RECAL:
+                self.need_recal = True
+        else:
+            st["good"], st["bad"] = st["good"] + 1, 0
+            if st["blocked"] and st["good"] >= self.Q_BACK:
+                st["blocked"] = False
+        if not st["blocked"]:
+            st["a"] = min(1.0, st["a"] + 0.25)
+        self.gate_info["quality"] = round(q, 3)
+        self.gate_info["q_blocked"] = st["blocked"]
+        info["quality"], info["q_blocked"] = round(q, 3), st["blocked"]
+        if st["blocked"]:
+            return raw                                   # show JoyAI's frame, never the broken one
+        if st["a"] < 1.0:                                # coming back: crossfade in
+            return cv2.addWeighted(res, st["a"], raw, 1.0 - st["a"], 0)
+        return res
 
     def patch_last(self, out_bgr, s, crop=None):
         """A late frame's stand-in: the last rendered face pasted onto THIS frame at its own face position (from

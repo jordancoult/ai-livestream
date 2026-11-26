@@ -196,12 +196,15 @@ class Link:
     def http(self, conn, req):
         if req.path.startswith("/ws"):
             return None
-        if req.path.split("?")[0] == "/" and f"t={self.a.token}" in req.path:
+        p = req.path.split("?")[0]
+        if (p == "/" and f"t={self.a.token}" in req.path) or p.rstrip("/") == f"/{self.a.token}":
             body = PHONE_PAGE.replace("__TOKEN__", self.a.token).replace("__BITRATE__", str(self.a.bitrate)).encode()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "text/html; charset=utf-8"),
                                                                ("Cache-Control", "no-store"),
                                                                ("Content-Length", str(len(body)))]), body)
-        return Response(http.HTTPStatus.NOT_FOUND, "Not Found", Headers([("Content-Length", "0")]), b"")
+        body = b"<h2 style='font-family:system-ui'>Wrong link: open the full link the laptop shows (it ends with a code).</h2>"
+        return Response(http.HTTPStatus.NOT_FOUND, "Not Found", Headers([("Content-Type", "text/html"),
+                                                                         ("Content-Length", str(len(body)))]), body)
 
 
 def laptop_server(link, port, urls):
@@ -259,7 +262,7 @@ async def main():
     a.token = a.token or secrets.token_urlsafe(9)
     ips = iface_ips()
     order = sorted(ips.items(), key=lambda kv: (kv[0] != a.iface, not kv[0].startswith("wl"), kv[0]))
-    urls = [(name, f"https://{ip}:{a.port}/?t={a.token}") for name, ip in order]
+    urls = [(name, f"https://{ip}:{a.port}/{a.token}") for name, ip in order]
     OUT.mkdir(parents=True, exist_ok=True)
     link = Link(a)
     laptop_server(link, a.view_port, urls)
@@ -335,10 +338,14 @@ LAPTOP_PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Phone 
 .wrap{display:flex;gap:16px;flex-wrap:wrap} img{height:70vh;background:#000;border-radius:6px} table{border-collapse:collapse}
 td{padding:3px 10px;border-bottom:1px solid #2a2f37;font-variant-numeric:tabular-nums} td:first-child{color:#8b939e}
 .ok{color:#3fb27f}.warn{color:#e0a03a}.bad{color:#e05a4f} code{color:#5a9cf0;word-break:break-all}</style></head><body>
-<h1>Phone link test</h1><div id="urls"></div>
+<h1>Phone link test</h1>
+<div style="display:flex;gap:16px;align-items:center;margin-bottom:12px"><div id="qr" style="background:#fff;padding:8px;border-radius:6px;line-height:0"></div>
+<div><div style="color:#8b939e">Scan with the phone camera (the phone on the Beryl uses the first link):</div><div id="urls"></div></div></div>
 <div class="wrap"><img id="v" src="/video"><table id="t"></table></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 const urls=__URLS__; document.getElementById("urls").innerHTML=urls.map(([n,u])=>`<div>${n}: <code>${u}</code></div>`).join("");
+if(window.QRCode&&urls.length) new QRCode(document.getElementById("qr"),{text:urls[0][1],width:170,height:170,correctLevel:QRCode.CorrectLevel.M});
 const c=(v,good,ok)=>v==null?"":(v<=good?"ok":v<=ok?"warn":"bad");
 async function tick(){ const s=await (await fetch("/stats")).json(), p=s.phone||{}, L=s.latency_ms, G=s.gap_ms, A=s.audio_latency_ms;
  const rows=[["connected",s.connected],["stream",s.kind||"–"],["phone camera",p.camera||"–"],

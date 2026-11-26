@@ -166,7 +166,7 @@ class Hub:
                     if x[:1] == b"V":
                         self.down.remove(x)
                         break
-        elif len(self.down) > 120:
+        elif sum(1 for x in self.down if x[:1] == b"A") >= 25:   # at most ~0.5 s of voice waiting for the phone
             return
         self.down.append(data)
 
@@ -318,6 +318,11 @@ class Hub:
         cap_l = now if off is None else cap - off
         if off is not None:
             self.link_ms.append(now - cap_l)
+            if now - cap_l > 500 and now - getattr(self, "flush_t", 0) > 2:   # a backlog formed: drop it now
+                self.flush_t = now
+                self.down.append(b"F")
+                print(f"[phone] frames arrive {now - cap_l:.0f} ms after capture: asking the phone to drop its backlog",
+                      flush=True)
         self.cnt["cam_in"] += 1
         if self.t_cam:
             self.cam_gaps.append(now / 1000 - self.t_cam)
@@ -521,9 +526,18 @@ try{userOff=+localStorage.getItem("avoff")||0;}catch(e){}
 function outLat(){return ctx?(ctx.outputLatency||0)+(ctx.baseLatency||0):0;}
 // ---- transport: one HTTPS request loop (Safari's WebSocket can hang for minutes; this doesn't, and is as fast).
 // The body carries what goes to the laptop, the response what comes back (the character's video + voice, clock pings).
-let outq=[], outBytes=0, inflight=false, lastPost=0;
-function out(m){ if(outBytes>3e6) return false; outq.push(m); outBytes+=m.byteLength; post(); return true; }
-async function post(){ if(inflight) return; inflight=true; lastPost=Date.now();
+let outq=[], outBytes=0, inflight=false, lastPost=0, flushes=0;
+// latency budget: nothing waits more than BUDGET ms to go out. A backlog (the request loop briefly slower than
+// real time) used to fill a 3 MB queue = ~5 s of delay that never drained (2026-11-26); now stale video is dropped
+// and the encoder sends a keyframe at once (H.264 can't resume mid-stream without one), stale mic audio dropped too.
+const BUDGET=250;
+function out(m){ m.t=Date.now(); outq.push(m); outBytes+=m.byteLength; post(); return true; }
+function trim(force){ const now=Date.now();
+  if(!force&&!outq.some(m=>(m[0]===72||m[0]===77)&&now-m.t>BUDGET)) return;
+  const before=outq.length; outq=outq.filter(m=>!(m[0]===72||m[0]===77)||(!force&&now-m.t<=BUDGET&&m[0]===77));
+  if(outq.length!==before){ flushes++; if(cam) cam.key(); }
+  outBytes=outq.reduce((a,m)=>a+m.byteLength,0); }
+async function post(){ if(inflight) return; inflight=true; lastPost=Date.now(); trim(false);
   const n=outq.reduce((a,m)=>a+4+m.byteLength,0), b=new Uint8Array(n), dv=new DataView(b.buffer); let i=0;
   for(const m of outq){ dv.setUint32(i,m.byteLength,true); b.set(m,i+4); i+=4+m.byteLength; } outq=[]; outBytes=0;
   try{ const r=await fetch(`https://${location.hostname}:${HP}/up?t=${T}`,{method:"POST",body:b,headers:{"Content-Type":"text/plain"}});
@@ -535,6 +549,7 @@ setInterval(()=>{ if(!inflight&&Date.now()-lastPost>25) post(); },20);   // keep
 function onDown(b){ const k=b[0], d=new DataView(b.buffer,b.byteOffset,b.byteLength);
   if(k===80){ const o=new Uint8Array(17), v=new DataView(o.buffer); v.setUint8(0,81); v.setFloat64(1,d.getFloat64(1,true),true); v.setFloat64(9,nowMs(),true); out(o); return; }
   if(k===75){ if(cam) cam.key(); return; }        // 'K': the pipeline (re)connected and needs a keyframe
+  if(k===70){ trim(true); return; }                // 'F': the laptop sees old frames: drop the backlog
   if(k===65&&ctx){ // 'A' the character's voice: s16le 48 kHz mono, scheduled with a small jitter buffer
     const s=new Int16Array(b.slice(1).buffer), buf=ctx.createBuffer(1,s.length,48000), dd=buf.getChannelData(0);
     for(let i=0;i<s.length;i++)dd[i]=s[i]/32768;
@@ -549,7 +564,7 @@ function show(){const now=performance.now(); let f=null;
   requestAnimationFrame(show);}
 setInterval(()=>{ if(!started) return;
   const c=cam?cam.stats():{}; const st={buf_ms:ctx?Math.round(Math.max(0,playAt-ctx.currentTime)*1000):0, out_lat_ms:Math.round(outLat()*1000),
-    shown_fps:+(shownN/2).toFixed(1), queued:frames.length, offset_ms:userOff, sr:ctx?ctx.sampleRate:0, camera:c.label?`${c.label} ${c.camera}`:"", enc_fps:c.enc_fps!=null?+(c.enc_fps/2).toFixed(1):null};
+    shown_fps:+(shownN/2).toFixed(1), queued:frames.length, up_queue:outq.length, up_kb:Math.round(outBytes/1024), flushes, offset_ms:userOff, sr:ctx?ctx.sampleRate:0, camera:c.label?`${c.label} ${c.camera}`:"", enc_fps:c.enc_fps!=null?+(c.enc_fps/2).toFixed(1):null};
   shownN=0; out(new TextEncoder().encode("S"+JSON.stringify(st)));
   $("st").textContent=(Date.now()-okT<2000?"connected":"reconnecting…")+` · ${(rx*8/1e6/2).toFixed(1)} Mbit/s`; rx=0; },2000);
 async function start(){ if(started) return; started=true;

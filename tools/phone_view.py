@@ -532,7 +532,7 @@ __CAM_JS__
 const T="__TOKEN__", CAM=__CAMERA__, DRIVE=__DRIVE__, H264=__H264__, HP=__HTTP_PORT__, $=id=>document.getElementById(id);
 const nowMs=()=>performance.timeOrigin+performance.now();
 var ctx=null, micOn=true, playAt=0, frames=[], lastURL=null, rx=0, lag=0.15, userOff=0, cam=null, started=false, okT=0, shownN=0;
-try{userOff=+localStorage.getItem("avoff")||0;}catch(e){}
+try{localStorage.removeItem("avoff");}catch(e){}   // sync starts at 0 on every load (not remembered)
 function outLat(){return ctx?(ctx.outputLatency||0)+(ctx.baseLatency||0):0;}
 // ---- transport: one HTTPS request loop (Safari's WebSocket can hang for minutes; this doesn't, and is as fast).
 // The body carries what goes to the laptop, the response what comes back (the character's video + voice, clock pings).
@@ -615,7 +615,7 @@ $("resumeb").onclick=async()=>{ await ctx.resume().catch(()=>{}); $("resume").hi
 $("camb").onclick=()=>{ $("camctl").hidden=!$("camctl").hidden; };
 $("mute").onclick=()=>{micOn=!micOn; $("mute").textContent=micOn?"Mic on":"Mic muted"; $("mute").className=micOn?"":"off";};
 // the slider hides behind the Sync button (a stray swipe on the always-visible slider set -400 unnoticed, 2026-11-26)
-function setOff(v){ userOff=v; $("off").value=v; $("syncb").textContent="Sync "+(v>0?"+":"")+v; try{localStorage.setItem("avoff",v);}catch(_){} }
+function setOff(v){ userOff=v; $("off").value=v; $("syncb").textContent="Sync "+(v>0?"+":"")+v; }
 setOff(userOff);
 $("syncb").onclick=()=>{ $("sync").hidden=!$("sync").hidden; };
 $("off").oninput=e=>setOff(+e.target.value);

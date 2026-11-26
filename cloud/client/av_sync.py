@@ -87,6 +87,8 @@ class AudioMonitor:
         self.flow = {"fed": 0, "got": 0, "buf": 0, "in_stage": 0, "stall_ms": 0}
         self._stall_logged = 0.0
         self._restarting = None
+        self.switching = None       # live voice switch in progress: the new voice's name (output muted meanwhile)
+        self.switch_failed = None   # the last switch failed: stays muted (never the raw voice) until the next pick
         self._adjusting = False
         self._smooth = None
         self._since_force = 999
@@ -104,6 +106,33 @@ class AudioMonitor:
                                      stdin=subprocess.PIPE)
         threading.Thread(target=self._run_logged, daemon=True).start()
         return self
+
+    def switch_voice(self, make, name):
+        """Live voice change: close the current stage, start the one make() returns (None = no voice change: the
+        mic passes through, delayed in sync). Output is muted while it loads (~10-25 s), so the performer's raw voice
+        never leaks. Returns False if a switch is already running."""
+        if self.switching:
+            return False
+        self.switching, self.switch_failed = name, None
+
+        def run():
+            old = self.voice
+            self.voice = None
+            try:
+                if old is not None:
+                    old.close()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self.voice = make()
+                print(f"[av_sync] voice now: {name}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                self.switch_failed = f"{name}: {e}"
+                print(f"[av_sync] voice switch to {name} failed ({e}); muted until another voice is picked", flush=True)
+            finally:
+                self.switching = None
+        threading.Thread(target=run, daemon=True).start()
+        return True
 
     def _restart_voice(self):
         from voice_stage import VoiceStage
@@ -141,7 +170,6 @@ class AudioMonitor:
         total exact, so a voice change costs no extra delay while the pipeline is slower than the stage."""
         buf = collections.deque()
         silence = bytes(BLOCK * 2)
-        voice_on = self.voice is not None
         t0, n_read = None, 0
         while not self.stop.is_set():
             b = self.cap.stdout.read(BLOCK * 2)
@@ -164,9 +192,11 @@ class AudioMonitor:
                 continue
             if self.record_in is not None:
                 self.record_in.append((time.time(), b))
-            if voice_on and self.voice.failed:   # stage died (e.g. the SSH link to the GPU box dropped): restart it;
-                buf.clear()                      # meanwhile MUTE (the plain mic would leak the performer's real voice)
-                if self._restarting is None:
+            voice_on = self.voice is not None
+            switching = bool(self.switching or self.switch_failed)
+            if switching or (voice_on and self.voice.failed):   # stage died (e.g. the SSH link to the GPU box
+                buf.clear()          # dropped) or a live voice switch: MUTE (the plain mic would leak the real voice)
+                if not switching and self._restarting is None:
                     self._restarting = threading.Thread(target=self._restart_voice, daemon=True)
                     self._restarting.start()
                 self.levels["in"].append(_rms(b))

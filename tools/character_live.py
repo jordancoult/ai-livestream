@@ -180,8 +180,11 @@ def main():
               # test: a fixed length; live: run until the driver ends (we stop the bridge then), so waiting for the
               # phone / a slow start never cuts the conversation short
               "--seconds", str(int(run_s + 40)) if a.test else "0"]
-    if a.voice_host and voice_on:
+    if a.voice_host:          # always: a live voice switch (console) may start a voice even if this one has none
         bridge += ["--voice-host", a.voice_host]
+    if self_drive:
+        bridge += ["--voice-self"]
+    bridge += ["--voice-name", f"{c['name']} (character)" if voice_on else "off"]
     av_off = (SYNC_PHONE_H264_MS if live_self and a.driver == "phonecam" else 0 if live_self else SYNC_SRT_DRIVER_MS) + (SYNC_REMOTE_VOICE_MS if a.voice_host and voice_on else 0)
     bridge += ["--monitor-offset-ms", str(av_off)]
     if live_self and a.driver == "phonecam":

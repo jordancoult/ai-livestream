@@ -72,6 +72,9 @@ p.add_argument("--voice-block-ms", type=int, default=100, help="--voice: convers
                "second, more stage delay; the stage must stay well under the video pipeline latency)")
 p.add_argument("--voice-gpu-share", type=int, default=None, help="--voice under CUDA MPS (tools/gpu_mps.sh): max %% "
                "of the GPU the voice stage may use, so it never stalls the face pass")
+p.add_argument("--voice-name", default=None, help="label of the starting voice (console display)")
+p.add_argument("--voice-self", action="store_true", help="you drive (your own voice): RVC voices use their "
+               "pitch_self (live voice switching, voices/catalog.json)")
 p.add_argument("--voice-host", default=None, help="--voice: run the converter on a GPU machine instead of this one, "
                "e.g. 'joyai' (cloud/infra/.pod.joyai, set up once with cloud/infra/voice_up.sh joyai). On the laptop "
                "it competes with the face pass for the GPU (lpfast 95%% -> 24-90%% frames); on the JoyAI 5090 it costs "
@@ -793,6 +796,7 @@ async def main():
     lat = []
     rt_lat = collections.deque(maxlen=250)    # JoyAI round trip per frame (console: where the latency is)
     send_times = collections.deque(maxlen=100)   # frames actually sent to JoyAI (console: send rate)
+    voice_state = {"name": args.voice_name}     # the live voice (survives JoyAI session restarts)
     from av_sync import AVSync
     if args.monitor_source == "airplay":
         args.monitor_source = "airplay_audio.monitor"
@@ -994,6 +998,9 @@ async def main():
                       if len(send_times) > 10 and send_times[-1] > send_times[0] else None,
                       "input_stale": getattr(src, "stale", 0),
                       "session": {k: start.get(k) for k in ("kv_reset_frames", "freeze_kv_on_static", "detection_mode")},
+                      "voice_name": voice_state["name"],
+                      "voice_switching": sync.monitor.switching if sync.monitor else None,
+                      "voice_switch_failed": sync.monitor.switch_failed if sync.monitor else None,
                       "facefix_available": ff is not None, "facefix_on": sess["ff_on"], "input_fps": src.fps(),
                       "input_live": src.live, "sync": sync.status()}
                 if ff is not None:
@@ -1019,6 +1026,36 @@ async def main():
                 if "synctest" in cmd:
                     sync.start_test()
                     return
+                if "voice_select" in cmd:   # live voice change (voices/catalog.json; console 'Voice' dropdown)
+                    name = str(cmd["voice_select"])
+                    cat = json.loads((Path(__file__).resolve().parents[2] / "voices" / "catalog.json").read_text())
+                    if name not in cat or name.startswith("_"):
+                        return say(f"unknown voice {name!r}; have {[k for k in cat if not k.startswith('_')]}")
+                    if sync.monitor is None:
+                        return say("voice switching needs --audio-monitor")
+                    spec, root = cat[name], Path(__file__).resolve().parents[2]
+
+                    def make(spec=spec):
+                        if spec["kind"] == "none":
+                            if args.voice_host:     # free the box's GPU: unload our voice servers (either kind)
+                                subprocess.run(["env", f"POD_FILE={root}/cloud/infra/.pod.{args.voice_host}", "bash",
+                                                str(root / "cloud/infra/pod.sh"),
+                                                "pkill -f '^./tools/rvc_live/.venv/bin/python ./tools/rvc_live/serve.py' ; "
+                                                "pkill -f '^.venv/bin/python serve.py --ref' ; true"],
+                                               capture_output=True, timeout=30)
+                            return None
+                        from voice_stage import VoiceStage, build_cmd
+                        rvc = spec["kind"] == "rvc"
+                        return VoiceStage(build_cmd(
+                            spec["kind"], model=str(root / (spec["model"] if rvc else spec["reference_clip"])),
+                            pitch=spec.get("pitch_self" if args.voice_self else "pitch", spec.get("pitch", 0)),
+                            index_rate=spec.get("index_rate", 0.5), block_ms=spec.get("block_ms", 200 if rvc else 180),
+                            gain=spec.get("gain", args.voice_gain), host=args.voice_host, protect=spec.get("protect", 0.5),
+                            rms_mix=spec.get("rms_mix", 1.0)), log=blog, gpu_share=args.voice_gpu_share)
+                    if sync.monitor.switch_voice(make, name):
+                        voice_state["name"] = name
+                        return say(f"switching voice to {spec.get('label', name)} (muted while it loads)")
+                    return say("a voice switch is already running")
                 if "av_chain" in cmd:   # voice timing (ms, - = earlier), live; saved for this input like a sync test
                     from av_sync import save_chain
                     sync.chain_ms = round(float(cmd["av_chain"]))

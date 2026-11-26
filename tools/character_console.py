@@ -284,6 +284,9 @@ class H(BaseHTTPRequestHandler):
             if (REPO / "characters" in p.parents or REPO / "assets" in p.parents) and p.is_file():
                 ct = {".png": "image/png", ".webp": "image/webp"}.get(p.suffix.lower(), "image/jpeg")
                 return self._send(200, p.read_bytes(), ct)
+        if self.path == "/api/voices":
+            cat = json.loads((REPO / "voices" / "catalog.json").read_text())
+            return self._send(200, json.dumps({k: v.get("label", k) for k, v in cat.items() if not k.startswith("_")}))
         if self.path == "/api/assets":
             imgs = sorted(str(p.relative_to(REPO)) for d in ("characters", "assets") for p in (REPO / d).rglob("*")
                           if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp") and p.stat().st_size < 20e6)
@@ -306,6 +309,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(apply_look(a)))
         if self.path == "/api/bypass":    # face pass bypass: JoyAI output goes straight out
             return self._send(200, json.dumps(bridge_cmd({"facefix": not a.get("on")})))
+        if self.path == "/api/voice":     # live voice switch (voices/catalog.json)
+            return self._send(200, json.dumps(bridge_cmd({"voice_select": a.get("name", "")})))
         if self.path == "/api/avchain":
             return self._send(200, json.dumps(bridge_cmd({"av_chain": float(a.get("ms", 0))})))
         if self.path == "/api/reset":
@@ -371,6 +376,8 @@ pre{margin:0;max-height:240px;overflow:auto;font:11px/1.45 ui-monospace,monospac
   <div style="min-width:0"><textarea id="prompt" rows="4" style="width:100%;resize:vertical;font:13px system-ui"></textarea>
    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center">
     <button id="apply" class="b2">Apply live</button><button id="reset" class="b2" title="Resets JoyAI memory and recalibrates the face pass: look at the camera with a neutral face">Reset memory + neutral</button>
+    <label title="Switch the voice live: the old voice unloads, the new one loads (~10-25 s, muted meanwhile)">Voice
+     <select id="voicesel"><option value="">…</option></select></label><span id="voicest" style="color:var(--dim);font-size:12px"></span>
     <button id="bypass" class="b3" title="Skip the face pass: the JoyAI output is sent out directly">Bypass face pass: off</button>
     <button id="revert" class="b3">Revert to preset</button><button id="save" class="b3">Save to preset</button>
     <span id="lookmsg" style="color:var(--dim)"></span></div>
@@ -425,6 +432,11 @@ let avChain=null;
 async function avStep(d){ if(avChain==null) return; const r=await (await fetch("/api/avchain",{method:"POST",body:JSON.stringify({ms:avChain+d})})).json();
   if(r.error) msg(r.error,"var(--bad)"); else { avChain+=d; $("av_v").textContent=(avChain>0?"+":"")+avChain+" ms"; } }
 $("av_m").onclick=()=>avStep(-50); $("av_p").onclick=()=>avStep(50);
+(async()=>{ try{ const v=await (await fetch("/api/voices")).json();
+  $("voicesel").innerHTML='<option value="">— pick to switch —</option>'+Object.entries(v).map(([k,l])=>`<option value="${k}">${l}</option>`).join(""); }catch(_){} })();
+$("voicesel").onchange=async()=>{ const n=$("voicesel").value; if(!n) return;
+  const r=await (await fetch("/api/voice",{method:"POST",body:JSON.stringify({name:n})})).json();
+  msg(r.error||"switching voice… (muted while it loads)", r.error?"var(--bad)":"var(--ok)"); $("voicesel").value=""; };
 let bypassOn=false;
 $("bypass").onclick=async()=>{ const r=await (await fetch("/api/bypass",{method:"POST",body:JSON.stringify({on:!bypassOn})})).json();
   if(r.error) msg(r.error,"var(--bad)"); else { bypassOn=!bypassOn; showBypass(); } };
@@ -454,6 +466,9 @@ async function tick(){
     if(window.QRCode) new QRCode($("qr"),{text:s.phone_url,width:96,height:96,correctLevel:QRCode.CorrectLevel.M}); qrFor=s.phone_url; }
   const ph_=s.phase||(s.running?["wait","starting"]:null); $("phase").textContent=ph_?ph_[1]:""; $("phase").className=ph_?ph_[0]:"";
   if(s.bridge&&s.bridge.sync&&s.bridge.sync.chain_ms!=null){ avChain=s.bridge.sync.chain_ms; $("av_v").textContent=(avChain>0?"+":"")+avChain+" ms"; }
+  if(s.bridge){ const b=s.bridge; $("voicest").textContent=b.voice_switching?`loading ${b.voice_switching}…`:
+     b.voice_switch_failed?`switch failed: ${b.voice_switch_failed}`:`now: ${b.voice_name||"–"}`;
+     $("voicest").style.color=b.voice_switch_failed?"var(--bad)":b.voice_switching?"var(--warn,orange)":"var(--dim)"; }
   if(s.bridge&&s.bridge.facefix_available){ bypassOn=!s.bridge.facefix_on; showBypass(); }
   const b=s.bridge, p=s.phone, sy=b&&b.sync||{}, lv=sy.levels||{}, fl=sy.flow||{}, vo=sy.voice||{}, mo=sy.monitor||{};
   const up=!!b; if(up!==dashUp){views(up); dashUp=up;}

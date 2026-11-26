@@ -1,0 +1,32 @@
+{
+  "_doc": "Voices you can switch to live (console 'Voice' dropdown; live_bridge.py command voice_select). kind: rvc (trained model, like Karen) | seedvc (zero-shot from a short clip) | none (your own voice, in sync). Only one voice server runs on the GPU box at a time; switching unloads the old one (output muted ~10-25 s meanwhile). gain: output dB (the Seed-VC voices are ~18 dB hotter than Karen's RVC at the bridge default -6).",
+  "off": {
+    "label": "Off (your own voice)",
+    "kind": "none"
+  },
+  "karen": {
+    "label": "Karen (RVC)",
+    "kind": "rvc",
+    "model": "models/rvc/karen/karen.pth",
+    "pitch": 0,
+    "pitch_self": 5,
+    "index_rate": 0.5,
+    "block_ms": 200,
+    "protect": 0.33,
+    "rms_mix": 0.25
+  },
+  "girl": {
+    "label": "Generic girl (Seed-VC; RVC model to come)",
+    "kind": "seedvc",
+    "reference_clip": "voices/girl/voice.wav",
+    "source": "CMU ARCTIC speaker slt (US English female), 7 sentences; free for any purpose incl. commercial (voices/girl/COPYING)",
+    "gain": -24.0
+  },
+  "guy": {
+    "label": "Generic guy (Seed-VC; RVC model to come)",
+    "kind": "seedvc",
+    "reference_clip": "voices/guy/voice.wav",
+    "source": "CMU ARCTIC speaker bdl (US English male), 7 sentences; free for any purpose incl. commercial (voices/guy/COPYING)",
+    "gain": -24.0
+  }
+}

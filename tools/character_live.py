@@ -19,6 +19,8 @@ bridge's options used here all default to off).
                                                 started for you; mirror the phone to "JoyAI-Cam") + laptop mic
   tools/character_live.py karen --driver srt     YOU drive: a phone app streaming SRT to this laptop (Larix, port
                                                 9000; cloud/docs/iphone-camera.md) + laptop mic
+  tools/character_live.py karen --phone          talk to it FROM YOUR PHONE (same Wi-Fi): a page shows the character
+                                                and plays its voice; the phone's mic is your voice (tools/phone_view.py)
   tools/character_live.py karen --driver webcam --test   the self-drive test clip (a face + a male voice) instead
                                                 of your camera/mic (same path as live from the bridge on)
   options: --mic SOURCE (your voice: any PulseAudio source, e.g. a headset mic), --camera /dev/videoN,
@@ -33,6 +35,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -72,6 +75,9 @@ def main():
     ap.add_argument("--camera", default="/dev/video0", help="--driver webcam: v4l2 device")
     ap.add_argument("--srt-port", type=int, default=9000, help="--driver phone/srt: port the phone stream arrives on")
     ap.add_argument("--pitch", type=int, default=None, help="voice pitch override (semitones)")
+    ap.add_argument("--phone", action="store_true", help="watch/hear/talk from a phone browser on the same Wi-Fi "
+                    "(its mic replaces --mic; the character's voice plays there instead of the laptop)")
+    ap.add_argument("--phone-port", type=int, default=8443)
     ap.add_argument("--test", action="store_true", help="drive from the recorded persona clip (no credits, silent)")
     ap.add_argument("--clip", default=None, help="--test: another recorded clip (default: the character's test_clip)")
     ap.add_argument("--seconds", type=float, default=60, help="--test: clip seconds")
@@ -101,7 +107,11 @@ def main():
     live_self = self_drive and not a.test        # your own camera + mic, no driver process of ours for the audio
     mods = [] if live_self else [sink("char_audio")]
     env = dict(os.environ)
-    if a.test:
+    if a.phone:      # the character's voice -> phone_out (-> the phone); the phone's mic -> phone_mic
+        mods += [sink("phone_out"), sink("phone_mic")]
+        env["PULSE_SINK"] = "phone_out"
+        a.mic = "phone_mic.monitor"
+    elif a.test:
         mods.append(sink("char_out"))
         env["PULSE_SINK"] = "char_out"
     run_s = a.seconds if a.test else a.max_seconds
@@ -122,7 +132,9 @@ def main():
         bridge += ["--voice-host", a.voice_host]
     if not a.no_face_pass:
         bridge += ["--facefix-preset", c["face_pass"]["lpfast_preset"]]
-    bridge += ["--output", str(tmp / "played.mp4")] if a.test else ["--output", "ffplay", "--dashboard", str(a.dashboard)]
+    bridge += ["--output", str(tmp / "played.mp4")] if a.test else ["--output", "ffplay"]
+    if a.phone or not a.test:
+        bridge += ["--dashboard", str(a.dashboard)]
     if out:
         bridge += ["--record-av", out, "--record-av-sbs"]
     bridge += shlex.split(a.bridge_args)
@@ -145,6 +157,28 @@ def main():
                 print(line, flush=True)
         if br.poll() is not None or "Traceback" in txt:
             sys.exit("[character] the bridge did not start (see the log)")
+        if a.phone:
+            pv = subprocess.Popen([PY, str(REPO / "tools/phone_view.py"), "--out-sink", "phone_out", "--mic-sink",
+                                   "phone_mic", "--port", str(a.phone_port), "--dashboard", str(a.dashboard),
+                                   "--title", c["name"]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            procs.insert(0, pv)
+            for line in pv.stdout:
+                print(line.rstrip(), flush=True)
+                if "https://" in line or "Traceback" in line:
+                    break
+            phone_in = threading.Event()
+
+            def relay():
+                for x in pv.stdout:
+                    print(x.rstrip(), flush=True)
+                    if "[phone] connected" in x:
+                        phone_in.set()
+            threading.Thread(target=relay, daemon=True).start()
+            if not a.test:
+                print("[character] open that link on the phone, accept the certificate warning once, tap Start "
+                      "(the session starts when the phone connects; waiting up to 15 min)", flush=True)
+                if a.driver == "nuance" and not phone_in.wait(900):
+                    sys.exit("[character] no phone connected in 15 min")
         if a.test:
             clip = a.clip or str(REPO / (c.get("self_drive", {}).get("test_clip", "assets/self_drive_test.mp4")
                                          if self_drive else conv["test_clip"]))

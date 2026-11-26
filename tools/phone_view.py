@@ -1,0 +1,227 @@
+"""Phone client for the live character mode: watch + hear the character and talk to it from a phone on the same Wi-Fi.
+
+  laptop -> phone : the output video (dashboard /stream/final, JPEG) + the character's voice (PulseAudio sink OUT_SINK,
+                    the bridge's audio monitor plays into it), over one WebSocket, re-synced on the phone
+  phone  -> laptop: the phone's mic (echo-cancelled by the browser) -> PulseAudio sink MIC_SINK; its .monitor is the
+                    "mic" the driver listens to (nuance_source --mic MIC_SINK.monitor)
+
+HTTPS with a self-signed certificate (browsers only allow the mic on secure pages): the phone shows a warning once
+(Safari: Show Details -> visit this website). A random token in the link keeps others on the Wi-Fi out.
+Started by tools/character_live.py --phone; standalone:
+  cloud/facefix/.venv/bin/python tools/phone_view.py --out-sink phone_out --mic-sink phone_mic [--port 8443]
+"""
+import argparse
+import asyncio
+import http
+import secrets
+import socket
+import ssl
+import subprocess
+import threading
+import time
+import urllib.request
+from pathlib import Path
+
+from websockets.asyncio.server import serve
+from websockets.datastructures import Headers
+from websockets.http11 import Response
+
+REPO = Path(__file__).resolve().parents[1]
+SR, CHUNK = 48000, 960  # 20 ms audio chunks
+
+
+def lan_ip():
+    """The Wi-Fi address (a VPN such as Mullvad owns the default route, so ask the interfaces, wl* first)."""
+    rows = [ln.split() for ln in subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True,
+                                                 text=True).stdout.splitlines()]
+    addrs = [(r[1], r[3].split("/")[0]) for r in rows if len(r) > 3]
+    for pref in ("wl", "en", "eth"):
+        for name, ip in addrs:
+            if name.startswith(pref) and not ip.startswith("127."):
+                return ip
+    return "127.0.0.1"
+
+
+def cert(ip):
+    d = REPO / ".tmp" / "phone_cert"
+    d.mkdir(parents=True, exist_ok=True)
+    crt, key, tag = d / "cert.pem", d / "key.pem", d / "ip.txt"
+    if not crt.exists() or not tag.exists() or tag.read_text() != ip:
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "825", "-keyout", str(key),
+                        "-out", str(crt), "-subj", "/CN=ai-livestream-phone", "-addext",
+                        f"subjectAltName=IP:{ip},DNS:localhost"], check=True, capture_output=True)
+        tag.write_text(ip)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(crt, key)
+    return ctx
+
+
+class Hub:
+    def __init__(self, a):
+        self.a, self.clients, self.loop = a, set(), None
+        self.mic = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1",
+                                     "--latency-msec=20", "-d", a.mic_sink], stdin=subprocess.PIPE)
+
+    def broadcast(self, data, video=False):
+        for ws in list(self.clients):
+            tr = ws.transport
+            if video and tr is not None and tr.get_write_buffer_size() > 600_000:
+                continue   # slow phone link: skip this frame rather than build a backlog
+            asyncio.run_coroutine_threadsafe(self._send(ws, data), self.loop)
+
+    @staticmethod
+    async def _send(ws, data):
+        try:
+            await ws.send(data)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def video_thread(self):
+        url = f"http://127.0.0.1:{self.a.dashboard}/stream/{self.a.view}?fps={self.a.fps}"
+        while True:
+            try:
+                with urllib.request.urlopen(url, timeout=10) as r:
+                    buf = b""
+                    while True:
+                        buf += r.read1(65536)
+                        while True:
+                            i = buf.find(b"Content-Length: ")
+                            if i < 0:
+                                break
+                            j = buf.find(b"\r\n\r\n", i)
+                            if j < 0:
+                                break
+                            n = int(buf[i + 16:buf.find(b"\r\n", i)])
+                            if len(buf) < j + 4 + n:
+                                break
+                            jpg = buf[j + 4:j + 4 + n]
+                            buf = buf[j + 4 + n:]
+                            if self.clients:
+                                self.broadcast(b"V" + jpg, video=True)
+            except Exception:  # noqa: BLE001  (bridge not up yet / restarted)
+                time.sleep(1)
+
+    def audio_thread(self):
+        while True:
+            p = subprocess.Popen(["parec", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1",
+                                  "--latency-msec=20", "-d", f"{self.a.out_sink}.monitor"], stdout=subprocess.PIPE)
+            while True:
+                b = p.stdout.read(CHUNK * 2)
+                if len(b) < CHUNK * 2:
+                    break
+                if self.clients:
+                    self.broadcast(b"A" + b)
+            p.kill()
+            time.sleep(1)
+
+    async def handler(self, ws):
+        if not ws.request.path.startswith(f"/ws?t={self.a.token}"):
+            await ws.close(1008, "bad token")
+            return
+        self.clients.add(ws)
+        print(f"[phone] connected ({len(self.clients)})", flush=True)
+        try:
+            async for m in ws:
+                if isinstance(m, bytes) and self.mic.poll() is None:
+                    self.mic.stdin.write(m)
+                    self.mic.stdin.flush()
+        finally:
+            self.clients.discard(ws)
+            print(f"[phone] disconnected ({len(self.clients)})", flush=True)
+
+    def http(self, conn, req):
+        if req.path.startswith("/ws"):
+            return None  # WebSocket upgrade
+        if req.path.split("?")[0] == "/" and f"t={self.a.token}" in req.path:
+            body = PAGE.replace("__TOKEN__", self.a.token).replace("__TITLE__", self.a.title).encode()
+            return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "text/html; charset=utf-8"),
+                                                               ("Cache-Control", "no-store"),
+                                                               ("Content-Length", str(len(body)))]), body)
+        return Response(http.HTTPStatus.NOT_FOUND, "Not Found", Headers([("Content-Length", "0")]), b"")
+
+
+async def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out-sink", default="phone_out")
+    ap.add_argument("--mic-sink", default="phone_mic")
+    ap.add_argument("--port", type=int, default=8443)
+    ap.add_argument("--dashboard", type=int, default=8765)
+    ap.add_argument("--view", default="final")
+    ap.add_argument("--fps", type=int, default=25)
+    ap.add_argument("--token", default=None)
+    ap.add_argument("--title", default="Character")
+    a = ap.parse_args()
+    a.token = a.token or secrets.token_urlsafe(9)
+    ip = lan_ip()
+    hub = Hub(a)
+    hub.loop = asyncio.get_running_loop()
+    threading.Thread(target=hub.video_thread, daemon=True).start()
+    threading.Thread(target=hub.audio_thread, daemon=True).start()
+    async with serve(hub.handler, "0.0.0.0", a.port, ssl=cert(ip), process_request=hub.http, max_size=2**20,
+                     ping_interval=20):
+        print(f"[phone] open on the phone (same Wi-Fi): https://{ip}:{a.port}/?t={a.token}", flush=True)
+        await asyncio.Future()
+
+
+PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>__TITLE__</title>
+<style>
+html,body{margin:0;height:100%;background:#000;color:#ddd;font:15px -apple-system,system-ui,sans-serif}
+#v{position:fixed;inset:0;width:100%;height:100%;object-fit:contain}
+#ui{position:fixed;left:0;right:0;bottom:0;padding:12px max(12px,env(safe-area-inset-left)) calc(12px + env(safe-area-inset-bottom));
+ display:flex;gap:10px;align-items:center;background:linear-gradient(transparent,#000c)}
+button{font:600 16px -apple-system,system-ui;border:0;border-radius:22px;padding:11px 18px;background:#2e7d32;color:#fff}
+button.off{background:#8a3b2b} #st{font-size:12px;opacity:.8;flex:1;text-align:right}
+#go{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000}
+#go p{max-width:300px;text-align:center;opacity:.75;margin:0}
+</style></head><body>
+<img id="v" alt="">
+<div id="go"><button id="start">Start talking to __TITLE__</button><p>Allow the microphone. Earbuds work best (the phone
+cancels echo, but speakers can still leak into the mic).</p></div>
+<div id="ui" hidden><button id="mute">Mic on</button><span id="st"></span></div>
+<script>
+const T="__TOKEN__", $=id=>document.getElementById(id);
+let ctx, ws, micOn=true, playAt=0, frames=[], lastURL=null, rx=0, lag=0.15;
+function connect(){
+  ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); ws.binaryType="arraybuffer";
+  ws.onmessage=e=>{const b=new Uint8Array(e.data), k=b[0];
+    if(k===65){ // 'A' audio: s16le 48 kHz mono, scheduled with a small jitter buffer
+      const s=new Int16Array(e.data.slice(1)), buf=ctx.createBuffer(1,s.length,48000), d=buf.getChannelData(0);
+      for(let i=0;i<s.length;i++)d[i]=s[i]/32768;
+      const now=ctx.currentTime; if(playAt<now+0.04||playAt>now+0.6)playAt=now+lag;
+      const n=ctx.createBufferSource(); n.buffer=buf; n.connect(ctx.destination); n.start(playAt); playAt+=buf.duration;
+    }else if(k===86){ // 'V' JPEG: shown as late as the audio is buffered, so picture and voice stay together
+      frames.push([performance.now()+Math.max(0,(playAt-ctx.currentTime))*1000, new Blob([b.subarray(1)],{type:"image/jpeg"})]);
+      if(frames.length>40)frames.shift();
+    } rx+=b.length;};
+  ws.onclose=()=>{$("st").textContent="reconnecting…"; setTimeout(connect,1000);};
+  ws.onopen=()=>{$("st").textContent="connected";};
+}
+function show(){const now=performance.now(); let f=null;
+  while(frames.length&&frames[0][0]<=now)f=frames.shift();
+  if(f){const u=URL.createObjectURL(f[1]); $("v").src=u; if(lastURL)URL.revokeObjectURL(lastURL); lastURL=u;}
+  requestAnimationFrame(show);}
+setInterval(()=>{if(ws&&ws.readyState===1)$("st").textContent=`${(rx*8/1e6/2).toFixed(1)} Mbit/s · audio buffer ${Math.round(Math.max(0,playAt-ctx.currentTime)*1000)} ms`; rx=0;},2000);
+$("start").onclick=async()=>{
+  ctx=new (window.AudioContext||window.webkitAudioContext)(); await ctx.resume();
+  let stream;
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});}
+  catch(e){alert("Microphone blocked: "+e.message); return;}
+  const src=ctx.createMediaStreamSource(stream), proc=ctx.createScriptProcessor(1024,1,1), r=48000/ctx.sampleRate;
+  proc.onaudioprocess=e=>{ if(!ws||ws.readyState!==1)return;
+    const x=e.inputBuffer.getChannelData(0), n=Math.floor(x.length*r), o=new Int16Array(n);
+    for(let i=0;i<n;i++){const v=micOn?x[Math.min(x.length-1,Math.floor(i/r))]:0; o[i]=Math.max(-1,Math.min(1,v))*32767;}
+    ws.send(o.buffer);};
+  const z=ctx.createGain(); z.gain.value=0; src.connect(proc); proc.connect(z); z.connect(ctx.destination);
+  $("go").hidden=true; $("ui").hidden=false; connect(); requestAnimationFrame(show);
+  try{await navigator.wakeLock.request("screen");}catch(e){}
+};
+$("mute").onclick=()=>{micOn=!micOn; $("mute").textContent=micOn?"Mic on":"Mic muted"; $("mute").className=micOn?"":"off";};
+</script></body></html>"""
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

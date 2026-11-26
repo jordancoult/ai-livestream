@@ -20,6 +20,13 @@ voice, `voice.pitch_self` semitones up, delayed to stay in sync with the output 
     tools/character_live.py karen --driver webcam --test     # self-drive test clip (assets/self_drive_test.mp4)
     options: --mic SOURCE (e.g. a headset mic; pactl list short sources), --pitch N, --bridge-args '--input-rotate cw'
 
+**From your phone** (`--phone`, either driver): the laptop serves a page on the Wi-Fi (`tools/phone_view.py`, HTTPS
+with a self-signed certificate: accept the warning once; the link carries a token). It shows the character's video
+and plays its voice, in sync; the phone's mic is your voice (to the Nuance persona, or the source voice with a self
+driver). With the Nuance driver the session starts only when the phone connects (no credits spent before).
+
+    tools/character_live.py karen --phone
+
 Wear headphones (your converted voice plays back in sync; speakers would feed it into the mic). Run the
 dashboard's A/V sync test once per camera kind so the camera's own delay is compensated (saved per input kind).
 

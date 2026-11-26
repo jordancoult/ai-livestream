@@ -11,7 +11,7 @@ The page posts JSON commands; the bridge applies them in its event loop (same ha
   {"session": {...}}                    start-message options, e.g. kv_reset_frames, freeze_kv_on_static (restart)
   {"quit": true}
 GET /status -> JSON (prompt, size, ref, rates, glass-to-glass, face pass), GET /assets -> reference images and prompts.
-GET /stream/<input|joyai|final> -> MJPEG live view (camera as sent | JoyAI output | after the face pass), ~12 fps,
+GET /stream/<input|joyai|final>[?fps=N] -> MJPEG live view (camera as sent | JoyAI output | after the face pass), ~12 fps,
 JPEG-encoded only while a view is open (closed views cost nothing). Binds 127.0.0.1 only.
 """
 
@@ -62,7 +62,9 @@ def start(port, submit, status, frames=None):
             if self.path == "/assets":
                 return self._send(200, json.dumps(list_assets()))
             if self.path.startswith("/stream/"):
-                return self._stream(self.path[len("/stream/"):].split("?")[0])
+                q = self.path.split("?", 1)
+                fps = next((float(kv[4:]) for kv in (q[1].split("&") if len(q) > 1 else []) if kv.startswith("fps=")), 12)
+                return self._stream(q[0][len("/stream/"):], min(30.0, max(1.0, fps)))
             if self.path.startswith("/asset/"):
                 p = (REPO / self.path[len("/asset/"):]).resolve()
                 if REPO / "assets" in p.parents and p.is_file():
@@ -70,7 +72,7 @@ def start(port, submit, status, frames=None):
                     return self._send(200, p.read_bytes(), ctype)
             self._send(404, '{"error": "not found"}')
 
-        def _stream(self, name):
+        def _stream(self, name, fps=12):
             import cv2
             self.send_response(200)
             self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
@@ -86,7 +88,7 @@ def start(port, submit, status, frames=None):
                         if ok:
                             self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
                                              + str(len(jpg)).encode() + b"\r\n\r\n" + jpg.tobytes() + b"\r\n")
-                    time.sleep(1 / 12)
+                    time.sleep(1 / (fps * 2) if fps > 12 else 1 / fps)  # >12: poll faster, send each new frame once
             except (BrokenPipeError, ConnectionResetError):
                 return
 

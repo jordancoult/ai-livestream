@@ -183,7 +183,13 @@ def main():
         if br.poll() is not None or "Traceback" in txt:
             sys.exit("[character] the bridge did not start (see the log)")
         if a.phone:
-            pv = subprocess.Popen([PY, str(REPO / "tools/phone_view.py"), "--out-sink", "phone_out", "--mic-sink",
+            # one stable link per laptop: a phone page left open keeps working across pipeline restarts
+            tok_f = REPO / ".tmp" / "phone_token"
+            if not tok_f.exists():
+                import secrets
+                tok_f.write_text(secrets.token_urlsafe(9))
+            pv = subprocess.Popen([PY, str(REPO / "tools/phone_view.py"), "--token", tok_f.read_text().strip(),
+                                   "--out-sink", "phone_out", "--mic-sink",
                                    "phone_mic", "--port", str(a.phone_port), "--dashboard", str(a.dashboard),
                                    "--title", c["name"]] + (["--camera-port", str(CAM_PORT)] if a.driver == "nuance" else [])
                                   + (["--drive-h264-port", str(H264_PORT)] if a.driver == "phonecam" and not a.test else []), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)

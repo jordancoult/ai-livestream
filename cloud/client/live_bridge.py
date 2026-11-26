@@ -267,65 +267,42 @@ class Source:
         return u
 
     def _grab_h264(self):
-        """Phone page H.264 (tools/phone_view.py --drive-h264-port): <len u32, capture ms f64 (laptop clock), flags u8>
-        + Annex-B packet. Decoded here once (no JPEG -> x264 -> SRT -> ffmpeg loop), rotated upright (the phone sends
-        sensor-oriented frames), cropped to the session's orientation; reconnects."""
-        import socket
+        """Phone page H.264 (tools/phone_view.py --drive-h264-port), decoded by cloud/client/h264_decode_proc.py in its
+        own process (decoding here competed with the send loop for the GIL: 14-18 fps sent of 30; ffmpeg on a raw
+        H.264 pipe buffered for seconds). Frames arrive rotated upright and cropped, each with its capture time."""
         import struct
-        hdr = struct.Struct("<IdB")
         host, port = self.spec.split("://", 1)[1].split(":")
         iw, ih = (720, 1280) if args.portrait else (1280, 720)
-        rots = (None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE)
-
-        def recv(s, n):
-            b = bytearray()
-            while len(b) < n:
-                c = s.recv(n - len(b))
-                if not c:
-                    raise ConnectionError
-                b += c
-            return bytes(b)
+        n = iw * ih * 3
         print(f"[bridge] waiting for the phone's H.264 on {self.spec}", flush=True)
         while True:
-            try:
-                s = socket.create_connection((host, int(port)), timeout=5)
-                s.settimeout(None)
-                dec, got = av.CodecContext.create("h264", "r"), 0
-                while True:
-                    n, cap, flags = hdr.unpack(recv(s, hdr.size))
-                    data = recv(s, n)
-                    try:
-                        frs = dec.decode(av.Packet(data))
-                    except av.error.InvalidDataError:
-                        continue
-                    for fr in frs:
-                        img = fr.to_ndarray(format="bgr24")
-                        rot = (flags >> 1) & 3
-                        if rot:
-                            img = cv2.rotate(img, rots[rot])
-                        h, w = img.shape[:2]
-                        sc = max(iw / w, ih / h)          # cover, then centre crop (= the SRT path's "crop" fit)
-                        img = cv2.resize(img, (round(w * sc), round(h * sc)), interpolation=cv2.INTER_AREA)
-                        y0, x0 = (img.shape[0] - ih) // 2, (img.shape[1] - iw) // 2
-                        f = np.ascontiguousarray(img[y0:y0 + ih, x0:x0 + iw])
-                        if not got:
-                            print(f"[bridge] phone H.264 connected: {w}x{h} (rotation {rot * 90} deg) -> {iw}x{ih}",
-                                  flush=True)
-                        got += 1
-                        now = time.time()
-                        self.stamps.append(now)
-                        with self.cv:
-                            self.latest, self.n = f, self.n + 1
-                            self.pending.append((now, f))
-                            self.cap_of[id(f)] = cap / 1000
-                            if len(self.cap_of) > 64:
-                                live = {id(x) for _, x in self.pending}
-                                self.cap_of = {k: v for k, v in self.cap_of.items() if k in live}
-                            self.cv.notify_all()
-                        if self.on_frame is not None:
-                            self.on_frame(now, f)
-            except (OSError, ConnectionError, struct.error):
-                time.sleep(1)
+            self.proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("h264_decode_proc.py")), host, port,
+                                          str(iw), str(ih)], stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
+            got = 0
+            while True:
+                head = self.proc.stdout.read(8)
+                buf = self.proc.stdout.read(n) if len(head) == 8 else b""
+                if len(buf) < n:
+                    break
+                cap = struct.unpack("<d", head)[0]
+                f = np.frombuffer(buf, np.uint8).reshape(ih, iw, 3)
+                if not got:
+                    print(f"[bridge] phone H.264 connected -> {iw}x{ih} (decoded in a separate process)", flush=True)
+                got += 1
+                now = time.time()
+                self.stamps.append(now)
+                with self.cv:
+                    self.latest, self.n = f, self.n + 1
+                    self.pending.append((now, f))
+                    self.cap_of[id(f)] = cap / 1000
+                    if len(self.cap_of) > 64:
+                        live = {id(x) for _, x in self.pending}
+                        self.cap_of = {k: v for k, v in self.cap_of.items() if k in live}
+                    self.cv.notify_all()
+                if self.on_frame is not None:
+                    self.on_frame(now, f)
+            self.proc.kill()
+            time.sleep(1)
 
     def _grab_net(self):
         """Phone / network stream through the system ffmpeg (has SRT), scaled+cropped to 720p in the session's

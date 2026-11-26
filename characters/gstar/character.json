@@ -1,0 +1,15 @@
+{
+  "name": "G-Star",
+  "description": "The user's pink cone-headed starfish character with a G-Star cap and gold chain (assets/char_front.png). Added 2026-11-26.",
+  "appearance": {
+    "reference": "characters/gstar/reference.png",
+    "prompt_file": "cloud/pipelines/joyai/prompts/replace.txt"
+  },
+  "face_pass": {
+    "lpfast_preset": "gstar"
+  },
+  "voice": {
+    "kind": "none",
+    "note": "no voice clip yet: your own voice passes through unchanged (still in sync). With a clip of his voice (1-30 s, clean speech) set kind 'seedvc' and reference_clip: characters/gstar/voice.wav; with a trained RVC model, kind 'rvc' like Karen."
+  }
+}

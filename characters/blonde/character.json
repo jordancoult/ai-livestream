@@ -1,0 +1,15 @@
+{
+  "name": "Blonde gamer girl",
+  "description": "Human streamer character (assets/blonde-gamer-girl.png). Added 2026-11-26.",
+  "appearance": {
+    "reference": "characters/blonde/reference.png",
+    "prompt_file": "cloud/pipelines/joyai/prompts/replace.txt"
+  },
+  "face_pass": {
+    "lpfast_preset": "girl"
+  },
+  "voice": {
+    "kind": "none",
+    "note": "no voice clip yet: your own voice passes through unchanged (still in sync). Add a clip -> kind 'seedvc' + reference_clip."
+  }
+}

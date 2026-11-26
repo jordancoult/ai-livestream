@@ -128,7 +128,7 @@ def preset(name):
     ap = c["appearance"]
     return {"character": name, "prompt": (REPO / ap["prompt_file"]).read_text().strip(), "ref": ap["reference"],
             "prompt_file": ap["prompt_file"], "lpfast_preset": c["face_pass"]["lpfast_preset"],
-            "voice": c["voice"].get("hf") or c["voice"]["model"]}
+            "voice": c.get("voice", {}).get("hf") or c.get("voice", {}).get("model") or c.get("voice", {}).get("reference_clip") or "none (your own voice)"}
 
 
 def data_url_to_file(d, path):

@@ -60,7 +60,7 @@ p.add_argument("--monitor-offset-ms", type=float, default=0, help="--audio-monit
                "automatic delay (+ = audio later); normally 0: run the A/V sync test instead")
 p.add_argument("--mic-lag-file", default=None, help="--audio-monitor: JSON {ms, t} with the audio source's measured lag "
                "behind its capture (tools/phone_view.py writes it for the phone mic); subtracted from the delay live")
-p.add_argument("--voice", default="off", choices=["off", "rvc"], help="--audio-monitor: change the voice before "
+p.add_argument("--voice", default="off", choices=["off", "rvc", "seedvc"], help="--audio-monitor: change the voice before "
                "playing it (rvc = an RVC v2 model on the local GPU, tools/rvc_live). Runs inside the A/V delay, so it "
                "adds no latency and stays in sync")
 p.add_argument("--voice-model", default=None, help="--voice rvc: model .pth (its .index next to it is used); default "

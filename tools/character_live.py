@@ -68,14 +68,29 @@ def load_character(name):
         avail = sorted(p.name for p in (REPO / "characters").iterdir() if (p / "character.json").exists())
         sys.exit(f"no character '{name}' (characters/{name}/character.json); available: {', '.join(avail)}")
     c = json.loads(f.read_text())
-    for path in (c["appearance"]["reference"], c["appearance"]["prompt_file"], c["voice"]["model"],
-                 c["conversation"]["personality_file"]):
+    # voice.kind: "rvc" (a trained model), "seedvc" (zero-shot from a short clip, voice.reference_clip) or "none"
+    # (no clip: your voice passes through unchanged, still in sync); conversation is only needed for --driver nuance
+    v = c.setdefault("voice", {"kind": "none"})
+    paths = [c["appearance"]["reference"], c["appearance"]["prompt_file"]]
+    paths += [v["model"]] if v.get("kind") == "rvc" else [v["reference_clip"]] if v.get("kind") == "seedvc" else []
+    paths += [c["conversation"]["personality_file"]] if c.get("conversation") else []
+    for path in paths:
         if not (REPO / path).exists():
             sys.exit(f"{name}: missing {path}")
     return c
 
 
 SELF = ("webcam", "phone", "srt", "phonecam")
+
+
+def voice_args(v, pitch):
+    """live_bridge.py voice flags for the character's voice kind (rvc: trained model; seedvc: a short clip)."""
+    if v["kind"] == "seedvc":
+        return ["--voice", "seedvc", "--voice-model", str(REPO / v["reference_clip"]), "--voice-pitch", str(pitch),
+                "--voice-block-ms", str(v.get("block_ms", 180))]
+    return ["--voice", v["kind"], "--voice-model", str(REPO / v["model"]), "--voice-pitch", str(pitch),
+            "--voice-index-rate", str(v["index_rate"]), "--voice-block-ms", str(v["block_ms"]),
+            "--voice-protect", str(v.get("protect", 0.5)), "--voice-rms-mix", str(v.get("rms_mix", 1.0))]
 
 
 def sink(name):
@@ -118,11 +133,14 @@ def main():
     ap.add_argument("--bridge-args", default="", help="extra live_bridge.py flags")
     a = ap.parse_args()
     c = load_character(a.character)
-    v, conv = c["voice"], c["conversation"]
+    v, conv = c["voice"], c.get("conversation")
     self_drive = a.driver in SELF
+    if not self_drive and not conv:
+        sys.exit(f"{a.character} has no 'conversation' section: it can only be self-driven (--driver webcam|phone|srt|phonecam)")
+    voice_on = not a.no_voice and v.get("kind", "none") != "none"
     if a.driver == "phonecam":
         a.phone = True
-    pitch = a.pitch if a.pitch is not None else (v.get("pitch_self", v["pitch"]) if self_drive else v["pitch"])
+    pitch = a.pitch if a.pitch is not None else (v.get("pitch_self", v.get("pitch", 0)) if self_drive else v.get("pitch", 0))
     if self_drive and not a.test and a.max_seconds == 300:
         a.max_seconds = 0  # you drive: run until Ctrl+C
     tmp = REPO / ".tmp" / "character"
@@ -158,15 +176,13 @@ def main():
               "--portrait", "--ref", a.ref or str(REPO / c["appearance"]["reference"]),
               "--prompt", a.prompt or (REPO / c["appearance"]["prompt_file"]).read_text().strip(),
               "--audio-monitor", "--monitor-source", mon,
-              "--voice", "off" if a.no_voice else v["kind"], "--voice-model", str(REPO / v["model"]), "--voice-pitch", str(pitch),
-              "--voice-index-rate", str(v["index_rate"]), "--voice-block-ms", str(v["block_ms"]),
-              "--voice-protect", str(v.get("protect", 0.5)), "--voice-rms-mix", str(v.get("rms_mix", 1.0)),
+              *(voice_args(v, pitch) if voice_on else ["--voice", "off"]),
               # test: a fixed length; live: run until the driver ends (we stop the bridge then), so waiting for the
               # phone / a slow start never cuts the conversation short
               "--seconds", str(int(run_s + 40)) if a.test else "0"]
-    if a.voice_host and not a.no_voice:
+    if a.voice_host and voice_on:
         bridge += ["--voice-host", a.voice_host]
-    av_off = (SYNC_PHONE_H264_MS if live_self and a.driver == "phonecam" else 0 if live_self else SYNC_SRT_DRIVER_MS) + (SYNC_REMOTE_VOICE_MS if a.voice_host and not a.no_voice else 0)
+    av_off = (SYNC_PHONE_H264_MS if live_self and a.driver == "phonecam" else 0 if live_self else SYNC_SRT_DRIVER_MS) + (SYNC_REMOTE_VOICE_MS if a.voice_host and voice_on else 0)
     bridge += ["--monitor-offset-ms", str(av_off)]
     if live_self and a.driver == "phonecam":
         lagf = REPO / ".tmp" / "phone_mic_lag.json"

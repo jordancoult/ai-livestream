@@ -34,15 +34,23 @@ def build_cmd(kind, model=None, pitch=5, index_rate=0.5, block_ms=100, gain=-6.0
     if cmd:
         return shlex.split(cmd)
     if host:
-        model = f"models/rvc/{Path(model).parent.name}/{Path(model).name}" if model else "models/rvc/karen/karen.pth"
-        remote = PRESETS[kind].format(repo=".", model=model, pitch=pitch, index_rate=index_rate, block_ms=block_ms,
+        rmodel = f"models/rvc/{Path(model).parent.name}/{Path(model).name}" if model else "models/rvc/karen/karen.pth"
+        remote = "" if kind == "seedvc" else PRESETS[kind].format(repo=".", model=rmodel, pitch=pitch, index_rate=index_rate, block_ms=block_ms,
                                       gain=gain, protect=protect, rms_mix=rms_mix)
         # first kill any earlier copy of ours: closing the SSH pipe does not stop the remote process, and orphans
         # filled the box's GPU so every restart failed (2026-11-26). The pattern is anchored to the python process's
         # own command line (^./tools/...), so it can't match this shell's command line, which contains the same text.
-        kill_old = "pkill -f '^./tools/rvc_live/.venv/bin/python ./tools/rvc_live/serve.py' ; sleep 1 ; "
-        return ["env", f"POD_FILE={REPO}/cloud/infra/.pod.{host}", "bash", str(REPO / "cloud" / "infra" / "pod.sh"),
-                f"cd /workspace/rvc && {kill_old}exec {remote}"]
+        # Only one voice server runs on the box at a time (VRAM: RVC 1.9 GB, Seed-VC 1.6 GB next to JoyAI's 29 GB of
+        # 32): starting one first unloads ours of either kind.
+        kill_old = ("pkill -f '^./tools/rvc_live/.venv/bin/python ./tools/rvc_live/serve.py' ; "
+                    "pkill -f '^.venv/bin/python serve.py --ref' ; sleep 1 ; ")
+        pod = ["env", f"POD_FILE={REPO}/cloud/infra/.pod.{host}", "bash", str(REPO / "cloud" / "infra" / "pod.sh")]
+        if kind == "seedvc":   # zero-shot from a short clip (voice.reference_clip): upload it, start in the clone
+            clip = Path(model)
+            subprocess.run(pod + ["put", str(clip), f"/workspace/seedvc_refs/{clip.name}"], capture_output=True, timeout=60)
+            return pod + [f"cd /workspace/seed-vc && {kill_old}exec .venv/bin/python serve.py --ref "
+                          f"/workspace/seedvc_refs/{clip.name} --block-ms {block_ms} --gain {gain}"]
+        return pod + [f"cd /workspace/rvc && {kill_old}exec {remote}"]
     model = model or str(REPO / "models" / "rvc" / "karen" / "karen.pth")
     return shlex.split(PRESETS[kind].format(repo=REPO, model=model, pitch=pitch, index_rate=index_rate,
                                             block_ms=block_ms, gain=gain, protect=protect, rms_mix=rms_mix))

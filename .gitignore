@@ -37,3 +37,4 @@ cloud/client/.cache/
 cloud/pipelines/joyai/training/data/raw/
 cloud/pipelines/joyai/training/data/processed/
 cloud/facefix/cu13libs/
+characters/zz_seedvc_test/

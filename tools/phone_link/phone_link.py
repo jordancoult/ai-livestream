@@ -31,6 +31,9 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 REPO = Path(__file__).resolve().parents[2]
+import sys as _sys  # noqa: E402
+_sys.path.insert(0, str(REPO / "tools"))
+from phone_cam_js import CAM_CSS, CAM_JS  # noqa: E402
 OUT = REPO / ".tmp" / "phone_link"
 HDR = struct.Struct("<dIB")      # capture time (epoch ms, phone clock), seq, keyframe flag
 
@@ -226,7 +229,8 @@ class Link:
                                                                ("Content-Length", str(len(body))), ("Connection", "close")]), body)
         p = req.path.split("?")[0]
         if (p == "/" and f"t={self.a.token}" in req.path) or p.rstrip("/") == f"/{self.a.token}":
-            body = PHONE_PAGE.replace("__TOKEN__", self.a.token).replace("__BITRATE__", str(self.a.bitrate)).encode()
+            body = (PHONE_PAGE.replace("__CAM_JS__", CAM_JS).replace("__CAM_CSS__", CAM_CSS)
+                    .replace("__TOKEN__", self.a.token).replace("__BITRATE__", str(self.a.bitrate))).encode()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "text/html; charset=utf-8"),
                                                                ("Cache-Control", "no-store"),
                                                                ("Content-Length", str(len(body))), ("Connection", "close")]), body)
@@ -305,13 +309,15 @@ async def main():
 PHONE_PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Phone link test</title>
 <style>[hidden]{display:none!important} body{margin:0;background:#000;color:#ddd;font:15px -apple-system,system-ui}
-#me{width:100%;max-height:62vh;object-fit:contain;transform:scaleX(-1);background:#111}
+#me{width:100%;max-height:55vh;object-fit:contain;background:#111}__CAM_CSS__
 #p{padding:12px} button{font:600 17px -apple-system;border:0;border-radius:22px;padding:12px 22px;background:#2e7d32;color:#fff}
 pre{font:13px ui-monospace,monospace;white-space:pre-wrap}</style></head><body>
 <video id="me" playsinline muted autoplay></video>
-<div id="p"><button id="go">Start link test</button><div id="sock" style="font:13px ui-monospace,monospace;margin:6px 0;color:#e0a03a">socket: –</div><pre id="st">Camera + mic go to the laptop only (local network).</pre></div>
+<div id="p"><button id="go">Start link test</button><div id="cams"></div>
+<div id="camrow"><input id="zoom" type="range" hidden><span id="zoomv"></span><button id="rot">↻ rotate</button></div><div id="sock" style="font:13px ui-monospace,monospace;margin:6px 0;color:#e0a03a">socket: –</div><pre id="st">Camera + mic go to the laptop only (local network).</pre></div>
 <script>
-const T="__TOKEN__", BR=__BITRATE__, $=id=>document.getElementById(id);
+__CAM_JS__
+const T="__TOKEN__", BR=__BITRATE__, $=id=>document.getElementById(id); let cam=null;
 const now=()=>performance.timeOrigin+performance.now();
 let ws, enc=null, seq=0, nEnc=0, nSent=0, encMs=[], kind="", fpsT=now();
 function hdr(tag,cap,sq,key){const b=new ArrayBuffer(14); const v=new DataView(b); v.setUint8(0,tag); v.setFloat64(1,cap,true); v.setUint32(9,sq,true); v.setUint8(13,key===true?1:(key|0)); return new Uint8Array(b);}
@@ -319,58 +325,44 @@ function send(tag,cap,sq,key,data){ if(!ws||ws.readyState!==1)return; if(ws.buff
   const h=hdr(tag,cap,sq,key), o=new Uint8Array(h.length+data.byteLength); o.set(h,0); o.set(new Uint8Array(data),h.length); ws.send(o); nSent++; }
 let nTry=0;
 function sock(m,ok){ $("sock").textContent="socket: "+m; $("sock").style.color=ok?"#3fb27f":"#e0a03a"; }
-function connect(){ nTry++; sock(`connecting (try ${nTry})…`); try{ ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); }catch(e){ sock("can't open: "+e.message); setTimeout(connect,1500); return; }
+function connect(){ nTry++; wsT0=Date.now(); sock(`connecting (try ${nTry})…`); try{ ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); }catch(e){ sock("can't open: "+e.message); setTimeout(connect,1500); return; }
   ws.binaryType="arraybuffer"; ws.onerror=()=>sock(`error (try ${nTry})`);
   ws.onmessage=e=>{const d=new DataView(e.data); if(d.getUint8(0)===80){ // 'P' ping: echo with our clock
       const o=new ArrayBuffer(17), v=new DataView(o); v.setUint8(0,81); v.setFloat64(1,d.getFloat64(1,true),true); v.setFloat64(9,now(),true); ws.send(o);} };
-  ws.onopen=()=>{ sock("open — sending to the laptop",true); report({hello:navigator.userAgent, webcodecs:"VideoEncoder" in window, rvfc:"requestVideoFrameCallback" in HTMLVideoElement.prototype}); };
+  ws.onopen=()=>{ sock("open — sending to the laptop",true); if(cam) cam.key(); report({hello:navigator.userAgent, webcodecs:"VideoEncoder" in window, rvfc:"requestVideoFrameCallback" in HTMLVideoElement.prototype}); };
   ws.onclose=e=>{ sock(`closed (code ${e.code}${e.reason?": "+e.reason:""}), retrying…`); setTimeout(connect,1000); }; }
 function report(o){ if(ws&&ws.readyState===1) ws.send(new TextEncoder().encode("S"+JSON.stringify(o))); }
 function fail(where,e){ const m=`${where}: ${e&&e.name?e.name+": ":""}${e&&e.message||e}`; $("st").textContent="ERROR "+m; $("go").hidden=false; report({error:m}); }
 window.addEventListener("error",e=>fail("page",e.error||e.message)); window.addEventListener("unhandledrejection",e=>fail("page",e.reason));
 connect();   // the socket first: the laptop sees the phone (and any error) even before Start
-$("go").onclick=()=>start().catch(e=>fail("start",e));
-async function start(){ $("go").hidden=true; $("st").textContent="starting camera…";
-  const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:960},height:{ideal:720},frameRate:{ideal:30}},
-     audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
-  const v=$("me"); v.srcObject=s; await v.play().catch(()=>{}); if(!v.videoWidth) await new Promise(r=>v.onloadedmetadata=r);
-  const st=s.getVideoTracks()[0].getSettings(); let W=v.videoWidth&~1, H=v.videoHeight&~1;
-  // raw camera frames come in the sensor's orientation (landscape on a portrait phone): encode them as they are and
-  // let the laptop rotate (cheap there; a canvas redraw here costs time). rot = quarter turns clockwise to upright.
-  const probe=new VideoFrame(v,{timestamp:0}); const FW=probe.displayWidth&~1, FH=probe.displayHeight&~1; probe.close();
-  const ROT=((FW>FH)!==(W>H))?1:0;
-  if("VideoEncoder" in window){
-    kind="h264 (WebCodecs, hardware)";
-    const cfg={codec:"avc1.42E01F",width:FW,height:FH,bitrate:BR,framerate:30,latencyMode:"realtime",hardwareAcceleration:"prefer-hardware",avc:{format:"annexb"}};
-    let sup=await VideoEncoder.isConfigSupported(cfg).catch(()=>({supported:false}));
-    if(!sup.supported){cfg.codec="avc1.640028"; sup=await VideoEncoder.isConfigSupported(cfg).catch(()=>({supported:false}));}
-    if(sup.supported){
-      const caps=[];   // FIFO: a realtime H.264 encode (no B-frames) returns frames in order; timestamps of canvas
-                       // frames don't survive exactly, so they can't be the key
-      enc=new VideoEncoder({output:(chunk)=>{const c=caps.shift()||{}; encMs.push(now()-c.t0); if(encMs.length>60)encMs.shift();
-          const b=new ArrayBuffer(chunk.byteLength); chunk.copyTo(b); send(72,c.cap,c.sq,(chunk.type==="key"?1:0)|(ROT<<1),b); nEnc++;},
-        error:e=>{$("st").textContent="encoder error: "+e.message;}});
-      enc.configure(cfg);
-      const step=(t,meta)=>{ if(enc.encodeQueueSize<2){ const cap=meta&&meta.captureTime?performance.timeOrigin+meta.captureTime:now();
-          const ts=Math.round(meta.mediaTime*1e6)||Math.round(t*1000); const f=new VideoFrame(v,{timestamp:ts}); const sq=++seq;
-          caps.push({cap,sq,t0:now()}); enc.encode(f,{keyFrame:sq%60===1}); f.close(); }
-        v.requestVideoFrameCallback(step); };
-      v.requestVideoFrameCallback(step);
-    } else kind="";
-  }
-  if(!enc){ kind="jpeg fallback (no WebCodecs H.264)"; const cv=document.createElement("canvas"), g=cv.getContext("2d"); cv.width=W; cv.height=H;
-    const step=(t,meta)=>{ const cap=meta&&meta.captureTime?performance.timeOrigin+meta.captureTime:now(); g.drawImage(v,0,0,W,H);
-      const sq=++seq; cv.toBlob(async b=>{ if(b) send(74,cap,sq,true,await b.arrayBuffer()); nEnc++; },"image/jpeg",0.7); v.requestVideoFrameCallback(step); };
-    v.requestVideoFrameCallback(step); }
-  // mic: timestamped PCM (48 kHz s16)
+$("go").onclick=()=>start().then(()=>{try{localStorage.setItem("autostart","1")}catch(_){}}).catch(e=>fail("start",e));
+// resilience: a stuck socket is retried, and coming back to the tab (or reopening the page) restores everything
+let wsT0=Date.now();
+setInterval(()=>{ if(ws&&ws.readyState===0&&Date.now()-wsT0>4000){ try{ws.close()}catch(_){} } },1000);
+function revive(){ if(document.visibilityState!=="visible") return;
+  if(!ws||ws.readyState>1) connect();
+  if(cam) cam.ensure(); wake(); }
+document.addEventListener("visibilitychange",revive); window.addEventListener("pageshow",revive); window.addEventListener("focus",revive);
+let wl=null; async function wake(){ try{ if(!wl||wl.released) wl=await navigator.wakeLock.request("screen"); }catch(_){} }
+let started=false;
+try{ if(localStorage.getItem("autostart")) setTimeout(()=>{ if(!started) start().catch(()=>{ $("go").hidden=false; sock("tap Start (iOS wants a tap)"); }); },300); }catch(_){}
+async function start(){ if(started) return; started=true; $("go").hidden=true; $("st").textContent="starting camera…";
+  if(!("VideoEncoder" in window)) throw new Error("this browser has no WebCodecs video encoder");
+  kind="h264 (WebCodecs, hardware)";
+  cam=CamEngine({video:$("me"), bitrate:BR, onerror:m=>fail("camera",m),
+    send:(cap,sq,flags,b)=>send(72,cap,sq,flags,b)});
+  try{ await cam.start(); }catch(e){ started=false; $("go").hidden=false; throw e; }
+  wake();
+  // mic separately (a camera switch never touches it): timestamped PCM (48 kHz s16)
+  const s=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
   const ctx=new AudioContext(); await ctx.resume(); const src=ctx.createMediaStreamSource(s), pr=ctx.createScriptProcessor(1024,1,1), r=48000/ctx.sampleRate;
   pr.onaudioprocess=e=>{ if(!ws||ws.readyState!==1)return; const x=e.inputBuffer.getChannelData(0), n=Math.floor(x.length*r), o=new Int16Array(n);
     for(let i=0;i<n;i++)o[i]=Math.max(-1,Math.min(1,x[Math.min(x.length-1,Math.floor(i/r))]))*32767;
     const cap=now()-1000*x.length/ctx.sampleRate, b=new Uint8Array(9+o.byteLength), dv=new DataView(b.buffer); dv.setUint8(0,65); dv.setFloat64(1,cap,true); b.set(new Uint8Array(o.buffer),9); ws.send(b);};
   const z=ctx.createGain(); z.gain.value=0; src.connect(pr); pr.connect(z); z.connect(ctx.destination);
-  setInterval(()=>{ const dt=(now()-fpsT)/1000; fpsT=now(); const em=encMs.length?encMs.reduce((a,b)=>a+b)/encMs.length:0;
-    const rep={kind, camera:`${st.width}x${st.height} @ ${st.frameRate||"?"} fps`, enc_fps:+(nEnc/dt).toFixed(1), sent_fps:+(nSent/dt).toFixed(1), encode_ms:+em.toFixed(1), ws_buffer:ws?ws.bufferedAmount:0};
-    nEnc=0; nSent=0; $("st").textContent=Object.entries(rep).map(([k,v])=>`${k}: ${v}`).join("\n");
+  setInterval(()=>{ const dt=(now()-fpsT)/1000; fpsT=now(); const c=cam.stats();
+    const rep={kind, camera:`${c.label} ${c.camera} (rot ${c.rot}°)`, enc_fps:+(c.enc_fps/dt).toFixed(1), sent_fps:+(nSent/dt).toFixed(1), encode_ms:c.encode_ms, ws_buffer:ws?ws.bufferedAmount:0};
+    nSent=0; $("st").textContent=Object.entries(rep).map(([k,v])=>`${k}: ${v}`).join("\n");
     report(rep); },1000);
 }
 </script></body></html>"""

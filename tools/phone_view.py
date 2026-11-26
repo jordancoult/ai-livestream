@@ -223,6 +223,7 @@ html,body{margin:0;height:100%;background:#000;color:#ddd;font:15px -apple-syste
  display:flex;gap:10px;align-items:center;background:linear-gradient(transparent,#000c)}
 button{font:600 16px -apple-system,system-ui;border:0;border-radius:22px;padding:11px 18px;background:#2e7d32;color:#fff}
 button.off{background:#8a3b2b} #st{font-size:12px;opacity:.8;flex:1;text-align:right}
+#sync{display:flex;align-items:center;gap:6px;font-size:12px;opacity:.85} #sync input{width:110px}
 #go{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000}
 #go p{max-width:300px;text-align:center;opacity:.75;margin:0}
 #me{position:fixed;top:calc(10px + env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));width:24vw;
@@ -231,20 +232,26 @@ button.off{background:#8a3b2b} #st{font-size:12px;opacity:.8;flex:1;text-align:r
 <img id="v" alt=""><video id="me" playsinline muted autoplay hidden></video>
 <div id="go"><button id="start">Start talking to __TITLE__</button><p>Allow the microphone (and camera: __TITLE__ sees you). Earbuds work best (the phone
 cancels echo, but speakers can still leak into the mic).</p></div>
-<div id="ui" hidden><button id="mute">Mic on</button><span id="st"></span></div>
+<div id="ui" hidden><button id="mute">Mic on</button>
+<label id="sync" title="Voice comes late (e.g. Bluetooth earbuds): slide right. Voice early: slide left.">sync
+<input id="off" type="range" min="-400" max="400" step="20" value="0"><span id="offv">0</span></label><span id="st"></span></div>
 <script>
 const T="__TOKEN__", CAM=__CAMERA__, $=id=>document.getElementById(id);
-let ctx, ws, micOn=true, playAt=0, frames=[], lastURL=null, rx=0, lag=0.15;
+let ctx, ws, micOn=true, playAt=0, frames=[], lastURL=null, rx=0, lag=0.15, userOff=0;
+try{userOff=+localStorage.getItem("avoff")||0;}catch(e){}
+// the picture is shown when its audio is heard: audio buffered + the device's audio output latency (+ user's offset,
+// e.g. Bluetooth earbuds); the sound is late if > 0, so the picture waits; < 0 = the voice waits instead
+function outLat(){return (ctx.outputLatency||0)+(ctx.baseLatency||0);}
 function connect(){
   ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); ws.binaryType="arraybuffer";
   ws.onmessage=e=>{const b=new Uint8Array(e.data), k=b[0];
     if(k===65){ // 'A' audio: s16le 48 kHz mono, scheduled with a small jitter buffer
       const s=new Int16Array(e.data.slice(1)), buf=ctx.createBuffer(1,s.length,48000), d=buf.getChannelData(0);
       for(let i=0;i<s.length;i++)d[i]=s[i]/32768;
-      const now=ctx.currentTime; if(playAt<now+0.04||playAt>now+0.6)playAt=now+lag;
+      const now=ctx.currentTime, l=lag+Math.max(0,-userOff/1000); if(playAt<now+0.04||playAt>now+0.6+l)playAt=now+l;
       const n=ctx.createBufferSource(); n.buffer=buf; n.connect(ctx.destination); n.start(playAt); playAt+=buf.duration;
     }else if(k===86){ // 'V' JPEG: shown as late as the audio is buffered, so picture and voice stay together
-      frames.push([performance.now()+Math.max(0,(playAt-ctx.currentTime))*1000, new Blob([b.subarray(1)],{type:"image/jpeg"})]);
+      frames.push([performance.now()+Math.max(0,(playAt-ctx.currentTime)+outLat())*1000+Math.max(0,userOff), new Blob([b.subarray(1)],{type:"image/jpeg"})]);
       if(frames.length>40)frames.shift();
     } rx+=b.length;};
   ws.onclose=e=>{ if(e.reason&&e.reason.startsWith("replaced")){$("st").textContent="opened elsewhere"; return;}
@@ -281,6 +288,8 @@ $("start").onclick=async()=>{
   $("go").hidden=true; $("ui").hidden=false; connect(); requestAnimationFrame(show);
   try{await navigator.wakeLock.request("screen");}catch(e){}
 };
+$("off").value=userOff; $("offv").textContent=userOff;
+$("off").oninput=e=>{userOff=+e.target.value; $("offv").textContent=userOff; try{localStorage.setItem("avoff",userOff);}catch(_){}};
 $("mute").onclick=()=>{micOn=!micOn; $("mute").textContent=micOn?"Mic on":"Mic muted"; $("mute").className=micOn?"":"off";};
 </script></body></html>"""
 

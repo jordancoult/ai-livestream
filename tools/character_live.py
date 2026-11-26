@@ -43,6 +43,14 @@ REPO = Path(__file__).resolve().parents[1]
 PY = str(REPO / "cloud/facefix/.venv/bin/python")
 NPY = str(REPO / "tools/nuance_live/.venv/bin/python")
 PORT = 9024
+# A/V calibration (measured 2026-11-25 with a flash/beep clip through the whole path, tools/phone_sync_check.py):
+#  - a driver that arrives as SRT video + PulseAudio audio (the Nuance persona, the test clip): its video is encoded,
+#    sent and decoded before the bridge clocks it, its audio is not -> the audio was ~55 ms early
+#  - the voice on the JoyAI box (--voice-host): the bridge's voice-delay estimate runs ~40 ms high -> audio early
+#  uncorrected: laptop recording -95 ms (audio early), phone view -71; with +95: +22 / +58 (runs vary +-20 ms;
+#  the phone path adds ~+30); set to 85 total: stream ~0, phone slightly late (the natural direction)
+SYNC_SRT_DRIVER_MS = 50
+SYNC_REMOTE_VOICE_MS = 35
 CAM_PORT = 9025   # --phone: the phone camera -> the Nuance persona (it sees you)
 
 
@@ -133,6 +141,8 @@ def main():
               "--seconds", str(int(run_s + 40)) if a.test else "0"]
     if a.voice_host and not a.no_voice:
         bridge += ["--voice-host", a.voice_host]
+    av_off = (0 if live_self else SYNC_SRT_DRIVER_MS) + (SYNC_REMOTE_VOICE_MS if a.voice_host and not a.no_voice else 0)
+    bridge += ["--monitor-offset-ms", str(av_off)]
     if not a.no_face_pass:
         bridge += ["--facefix-preset", c["face_pass"]["lpfast_preset"]]
     bridge += ["--output", str(tmp / "played.mp4")] if a.test else ["--output", "ffplay"]

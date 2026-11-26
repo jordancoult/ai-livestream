@@ -128,7 +128,9 @@ def main():
               "--voice", "off" if a.no_voice else v["kind"], "--voice-model", str(REPO / v["model"]), "--voice-pitch", str(pitch),
               "--voice-index-rate", str(v["index_rate"]), "--voice-block-ms", str(v["block_ms"]),
               "--voice-protect", str(v.get("protect", 0.5)), "--voice-rms-mix", str(v.get("rms_mix", 1.0)),
-              "--seconds", str(int(run_s + 40)) if run_s else "0"]
+              # test: a fixed length; live: run until the driver ends (we stop the bridge then), so waiting for the
+              # phone / a slow start never cuts the conversation short
+              "--seconds", str(int(run_s + 40)) if a.test else "0"]
     if a.voice_host and not a.no_voice:
         bridge += ["--voice-host", a.voice_host]
     if not a.no_face_pass:

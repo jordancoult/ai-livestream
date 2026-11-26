@@ -126,6 +126,9 @@ class Hub:
         if not ws.request.path.startswith(f"/ws?t={self.a.token}"):
             await ws.close(1008, "bad token")
             return
+        for old in list(self.clients):   # one phone at a time: a reload / second tab replaces the old one
+            self.clients.discard(old)
+            asyncio.ensure_future(old.close(1000, "replaced by a newer connection"))
         self.clients.add(ws)
         print(f"[phone] connected ({len(self.clients)})", flush=True)
         try:
@@ -213,6 +216,7 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>__TITLE__</title>
 <style>
+[hidden]{display:none!important}
 html,body{margin:0;height:100%;background:#000;color:#ddd;font:15px -apple-system,system-ui,sans-serif}
 #v{position:fixed;inset:0;width:100%;height:100%;object-fit:contain}
 #ui{position:fixed;left:0;right:0;bottom:0;padding:12px max(12px,env(safe-area-inset-left)) calc(12px + env(safe-area-inset-bottom));
@@ -243,7 +247,8 @@ function connect(){
       frames.push([performance.now()+Math.max(0,(playAt-ctx.currentTime))*1000, new Blob([b.subarray(1)],{type:"image/jpeg"})]);
       if(frames.length>40)frames.shift();
     } rx+=b.length;};
-  ws.onclose=()=>{$("st").textContent="reconnecting…"; setTimeout(connect,1000);};
+  ws.onclose=e=>{ if(e.reason&&e.reason.startsWith("replaced")){$("st").textContent="opened elsewhere"; return;}
+    $("st").textContent="reconnecting…"; setTimeout(connect,1000);};
   ws.onopen=()=>{$("st").textContent="connected";};
 }
 function show(){const now=performance.now(); let f=null;
@@ -252,11 +257,12 @@ function show(){const now=performance.now(); let f=null;
   requestAnimationFrame(show);}
 setInterval(()=>{if(ws&&ws.readyState===1)$("st").textContent=`${(rx*8/1e6/2).toFixed(1)} Mbit/s · audio buffer ${Math.round(Math.max(0,playAt-ctx.currentTime)*1000)} ms`; rx=0;},2000);
 $("start").onclick=async()=>{
+  if($("start").disabled)return; $("start").disabled=true; $("start").textContent="Starting…";
   ctx=new (window.AudioContext||window.webkitAudioContext)(); await ctx.resume();
   let stream;
   const ac={echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1};
   try{stream=await navigator.mediaDevices.getUserMedia(CAM?{audio:ac,video:{facingMode:"user",width:{ideal:640},height:{ideal:480}}}:{audio:ac});}
-  catch(e){alert("Microphone/camera blocked: "+e.message); return;}
+  catch(e){alert("Microphone/camera blocked: "+e.message); $("start").disabled=false; $("start").textContent="Start talking to __TITLE__"; return;}
   if(CAM&&stream.getVideoTracks().length){ // the persona sees you: JPEG frames at ~15 fps
     const me=$("me"); me.srcObject=stream; me.hidden=false; await me.play().catch(()=>{});
     const cv=document.createElement("canvas"), g=cv.getContext("2d"); let busy=false;

@@ -104,6 +104,7 @@ class Link:
         self.bytes = collections.deque(maxlen=250)      # (t, n)
         self.last_seq, self.dropped, self.frames, self.kind = None, 0, 0, None
         self.phone = {}
+        self.http_last = self.http_ping = 0.0
         self.csv = open(OUT / "frames.csv", "w")
         self.csv.write("t_arrival_ms,seq,key,bytes,latency_ms,decode_ms,rtt_ms\n")
 
@@ -168,23 +169,8 @@ class Link:
         pt = asyncio.create_task(self.pinger(ws))
         try:
             async for m in ws:
-                if not isinstance(m, bytes) or not m:
-                    continue
-                k = m[:1]
-                if k == b"H":
-                    self.video(m)
-                elif k == b"J":
-                    self.video(m, jpeg=True)
-                elif k == b"A":
-                    self.audio(m)
-                elif k == b"Q":
-                    t_send, t_phone = struct.unpack_from("<dd", m, 1)
-                    self.clock.add(t_send, t_phone, time.time() * 1000)
-                elif k == b"S":
-                    try:
-                        self.phone = {**json.loads(m[1:].decode()), "t": time.time()}
-                    except ValueError:
-                        pass
+                if isinstance(m, bytes) and m:
+                    self.on_msg(m)
         except Exception:  # noqa: BLE001
             import traceback
             print("[link] connection error:\n" + traceback.format_exc(), flush=True)
@@ -194,6 +180,63 @@ class Link:
                 self.ws = None
             print("[link] phone disconnected", flush=True)
 
+    def on_msg(self, m):
+        k = m[:1]
+        if k == b"H":
+            self.video(m)
+        elif k == b"J":
+            self.video(m, jpeg=True)
+        elif k == b"A":
+            self.audio(m)
+        elif k == b"Q":
+            t_send, t_phone = struct.unpack_from("<dd", m, 1)
+            self.clock.add(t_send, t_phone, time.time() * 1000)
+        elif k == b"S":
+            try:
+                self.phone = {**json.loads(m[1:].decode()), "t": time.time()}
+            except ValueError:
+                pass
+
+    async def http_uplink(self, r, w):
+        """Fallback transport when Safari's WebSocket won't open (it hangs for minutes at times while plain HTTPS
+        works): POST /up?t=TOKEN, body = [u32 len][message]..., response = the same framing with what the laptop
+        has for the phone (clock pings). Keep-alive; CORS-simple (text/plain) so no preflight."""
+        try:
+            while True:
+                head = await r.readuntil(b"\r\n\r\n")
+                lines = head.decode(errors="replace").split("\r\n")
+                method, path = (lines[0].split(" ") + ["", ""])[:2]
+                hdrs = {ln.split(":", 1)[0].strip().lower(): ln.split(":", 1)[1].strip() for ln in lines[1:] if ":" in ln}
+                body = await r.readexactly(int(hdrs.get("content-length", 0) or 0))
+                out = b""
+                if method == "POST" and path.startswith(f"/up?t={self.a.token}"):
+                    if time.time() - self.http_last > 2:
+                        print("[link] phone on the HTTP fallback (no WebSocket)", flush=True)
+                        self.dec = av.CodecContext.create("h264", "r")
+                    self.http_last = time.time()
+                    i = 0
+                    while i + 4 <= len(body):
+                        n = struct.unpack_from("<I", body, i)[0]
+                        self.on_msg(body[i + 4:i + 4 + n])
+                        i += 4 + n
+                    if time.time() - self.http_ping > 0.5:      # clock ping (the phone answers at once)
+                        self.http_ping = time.time()
+                        p = b"P" + struct.pack("<d", time.time() * 1000)
+                        out = struct.pack("<I", len(p)) + p
+                    code = "200 OK"
+                elif method == "OPTIONS":
+                    code = "204 No Content"
+                else:
+                    code = "404 Not Found"
+                w.write((f"HTTP/1.1 {code}\r\nContent-Type: application/octet-stream\r\n"
+                         f"Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: *\r\n"
+                         f"Access-Control-Allow-Methods: POST\r\nContent-Length: {len(out)}\r\n\r\n").encode() + out)
+                await w.drain()
+        except (asyncio.IncompleteReadError, ConnectionError, OSError, asyncio.LimitOverrunError):
+            pass
+        finally:
+            w.close()
+
     def stats(self):
         now = time.time()
         arr = [t for t in self.arr if now - t < 3]
@@ -202,7 +245,8 @@ class Link:
         alat = np.array(self.alat)
         br = sum(n for t, n in self.bytes if now - t < 3) * 8 / 3 / 1e6
         pct = lambda x, p: None if not len(x) else round(float(np.percentile(x, p)), 1)  # noqa: E731
-        return {"connected": self.ws is not None, "kind": self.kind,
+        via = "websocket" if self.ws is not None else ("http fallback" if now - self.http_last < 2 else None)
+        return {"connected": via is not None, "transport": via, "kind": self.kind,
                 "fps": round(len(arr) / 3, 1) if arr else 0.0,
                 "latency_ms": {"p50": pct(lat, 50), "p90": pct(lat, 90), "p99": pct(lat, 99), "max": pct(lat, 100)},
                 "gap_ms": {"p50": pct(gaps, 50), "p90": pct(gaps, 90), "max": pct(gaps, 100)},
@@ -230,6 +274,7 @@ class Link:
         p = req.path.split("?")[0]
         if (p == "/" and f"t={self.a.token}" in req.path) or p.rstrip("/") == f"/{self.a.token}":
             body = (PHONE_PAGE.replace("__CAM_JS__", CAM_JS).replace("__CAM_CSS__", CAM_CSS)
+                    .replace("__HTTP_PORT__", str(self.a.port + 3))
                     .replace("__TOKEN__", self.a.token).replace("__BITRATE__", str(self.a.bitrate))).encode()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "text/html; charset=utf-8"),
                                                                ("Cache-Control", "no-store"),
@@ -298,7 +343,9 @@ async def main():
     OUT.mkdir(parents=True, exist_ok=True)
     link = Link(a)
     laptop_server(link, a.view_port, urls)
-    async with serve(link.handler, "0.0.0.0", a.port, ssl=cert([ip for _, ip in order]), process_request=link.http,
+    ctx = cert([ip for _, ip in order])
+    await asyncio.start_server(link.http_uplink, "0.0.0.0", a.port + 3, ssl=ctx, limit=16 * 2**20)
+    async with serve(link.handler, "0.0.0.0", a.port, ssl=ctx, process_request=link.http,
                      max_size=8 * 2**20, ping_interval=20):
         for name, u in urls:
             print(f"[link] phone URL via {name}: {u}", flush=True)
@@ -321,23 +368,42 @@ const T="__TOKEN__", BR=__BITRATE__, $=id=>document.getElementById(id); var cam=
 const now=()=>performance.timeOrigin+performance.now();
 let ws, enc=null, seq=0, nEnc=0, nSent=0, encMs=[], kind="", fpsT=now();
 function hdr(tag,cap,sq,key){const b=new ArrayBuffer(14); const v=new DataView(b); v.setUint8(0,tag); v.setFloat64(1,cap,true); v.setUint32(9,sq,true); v.setUint8(13,key===true?1:(key|0)); return new Uint8Array(b);}
-function send(tag,cap,sq,key,data){ if(!ws||ws.readyState!==1)return; if(ws.bufferedAmount>2e6) return; // link can't keep up: drop
-  const h=hdr(tag,cap,sq,key), o=new Uint8Array(h.length+data.byteLength); o.set(h,0); o.set(new Uint8Array(data),h.length); ws.send(o); nSent++; }
+// transport: the WebSocket when it's open, else (Safari's WebSocket can hang for minutes) HTTPS POSTs to the laptop
+let httpMode=false, outq=[], outBytes=0, inflight=false;
+function out(msg){ if(ws&&ws.readyState===1){ if(ws.bufferedAmount>2e6) return false; ws.send(msg); return true; }
+  if(!httpMode) return false;
+  if(outBytes>2e6) return false;                       // link can't keep up: drop
+  outq.push(msg); outBytes+=msg.byteLength; post(); return true; }
+async function post(){ if(inflight||!outq.length) return; inflight=true;
+  const n=outq.reduce((a,m)=>a+4+m.byteLength,0), b=new Uint8Array(n), dv=new DataView(b.buffer); let i=0;
+  for(const m of outq){ dv.setUint32(i,m.byteLength,true); b.set(new Uint8Array(m.buffer||m,m.byteOffset||0,m.byteLength),i+4); i+=4+m.byteLength; }
+  outq=[]; outBytes=0;
+  try{ const r=await fetch(`https://${location.hostname}:__HTTP_PORT__/up?t=${T}`,{method:"POST",body:b,headers:{"Content-Type":"text/plain"}});
+    const a=new Uint8Array(await r.arrayBuffer()), v=new DataView(a.buffer); let j=0;
+    while(j+4<=a.length){ const len=v.getUint32(j,true); onDown(new DataView(a.buffer,j+4,len)); j+=4+len; }
+    if(httpMode) sock("HTTP fallback — sending to the laptop (WebSocket unavailable)",true);
+  }catch(e){ sock("HTTP fallback error: "+e.message); await new Promise(r=>setTimeout(r,500)); }
+  inflight=false; if(outq.length) post(); }
+function onDown(d){ if(d.getUint8(0)===80){ // 'P' clock ping: echo with our clock, at once
+    const o=new Uint8Array(17), v=new DataView(o.buffer); v.setUint8(0,81); v.setFloat64(1,d.getFloat64(1,true),true); v.setFloat64(9,now(),true); out(o); } }
+function send(tag,cap,sq,key,data){
+  const h=hdr(tag,cap,sq,key), o=new Uint8Array(h.length+data.byteLength); o.set(h,0); o.set(new Uint8Array(data),h.length); if(out(o)) nSent++; }
 let nTry=0;
 function sock(m,ok){ $("sock").textContent="socket: "+m; $("sock").style.color=ok?"#3fb27f":"#e0a03a"; }
 function connect(){ nTry++; wsT0=Date.now(); sock(`connecting (try ${nTry})…`); try{ ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); }catch(e){ sock("can't open: "+e.message); setTimeout(connect,1500); return; }
   ws.binaryType="arraybuffer"; ws.onerror=()=>sock(`error (try ${nTry})`);
-  ws.onmessage=e=>{const d=new DataView(e.data); if(d.getUint8(0)===80){ // 'P' ping: echo with our clock
-      const o=new ArrayBuffer(17), v=new DataView(o); v.setUint8(0,81); v.setFloat64(1,d.getFloat64(1,true),true); v.setFloat64(9,now(),true); ws.send(o);} };
-  ws.onopen=()=>{ sock("open — sending to the laptop",true); if(cam) cam.key(); report({hello:navigator.userAgent, webcodecs:"VideoEncoder" in window, rvfc:"requestVideoFrameCallback" in HTMLVideoElement.prototype}); };
+  ws.onmessage=e=>onDown(new DataView(e.data));
+  ws.onopen=()=>{ httpMode=false; sock("open — sending to the laptop (WebSocket)",true); if(cam) cam.key(); report({hello:navigator.userAgent, webcodecs:"VideoEncoder" in window, rvfc:"requestVideoFrameCallback" in HTMLVideoElement.prototype}); };
   ws.onclose=e=>{ sock(`closed (code ${e.code}${e.reason?": "+e.reason:""}), retrying…`); setTimeout(connect,1000); }; }
-function report(o){ if(ws&&ws.readyState===1) ws.send(new TextEncoder().encode("S"+JSON.stringify(o))); }
+function report(o){ out(new TextEncoder().encode("S"+JSON.stringify(o))); }
 function fail(where,e){ const m=`${where}: ${e&&e.name?e.name+": ":""}${e&&e.message||e}`; $("st").textContent="ERROR "+m; $("go").hidden=false; report({error:m}); }
 window.addEventListener("error",e=>fail("page",e.error||e.message)); window.addEventListener("unhandledrejection",e=>fail("page",e.reason));
 connect();   // the socket first: the laptop sees the phone (and any error) even before Start
 $("go").onclick=()=>start().then(()=>{try{localStorage.setItem("autostart","1")}catch(_){}}).catch(e=>fail("start",e));
 // resilience: a stuck socket is retried, and coming back to the tab (or reopening the page) restores everything
-setInterval(()=>{ if(ws&&ws.readyState===0&&Date.now()-wsT0>4000){ try{ws.close()}catch(_){} } },1000);
+setInterval(()=>{ if(ws&&ws.readyState===0&&Date.now()-wsT0>4000){ try{ws.close()}catch(_){} }
+  // no open WebSocket for 3 s: carry on over HTTPS (a keyframe first: the laptop's decoder starts fresh), keep retrying
+  if(!(ws&&ws.readyState===1)&&!httpMode&&Date.now()-wsT0>3000){ httpMode=true; if(cam) cam.key(); sock("switching to the HTTP fallback…"); post(); } },1000);
 function revive(){ if(document.visibilityState!=="visible") return;
   if(!ws||ws.readyState>1) connect();
   if(cam) cam.ensure(); wake(); }
@@ -386,7 +452,7 @@ if(window.QRCode&&urls.length) new QRCode(document.getElementById("qr"),{text:ur
 if(window.QRCode&&urls.length) new QRCode(document.getElementById("qrca"),{text:urls[0][1].replace(/\/[^\/]+$/,"/ca.crt"),width:96,height:96,correctLevel:QRCode.CorrectLevel.M});
 const c=(v,good,ok)=>v==null?"":(v<=good?"ok":v<=ok?"warn":"bad");
 async function tick(){ const s=await (await fetch("/stats")).json(), p=s.phone||{}, L=s.latency_ms, G=s.gap_ms, A=s.audio_latency_ms;
- const rows=[["connected",s.connected],["stream",s.kind||"–"],["phone camera",p.camera||"–"],
+ const rows=[["connected",s.connected?`yes (${s.transport})`:"no",s.connected?(s.transport==="websocket"?"ok":"warn"):"bad"],["stream",s.kind||"–"],["phone camera",p.camera||"–"],
   ["fps received",s.fps,s.fps>=25?"ok":s.fps>=20?"warn":"bad"],
   ["latency p50 / p90 / p99 / max (ms)",`${L.p50??"–"} / ${L.p90??"–"} / ${L.p99??"–"} / ${L.max??"–"}`,c(L.p90,50,80)],
   ["arrival gap p50 / p90 / max (ms)",`${G.p50??"–"} / ${G.p90??"–"} / ${G.max??"–"}`,c(G.max,60,120)],

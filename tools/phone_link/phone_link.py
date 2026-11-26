@@ -305,6 +305,14 @@ def laptop_server(link, port, urls):
                 self.send_header("Content-Length", str(len(b)))
                 self.end_headers()
                 self.wfile.write(b)
+            elif self.path.startswith("/frame.jpg"):      # the latest frame (the page polls: self-healing preview)
+                j = link.latest_jpg or b""
+                self.send_response(200 if j else 204)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(j)))
+                self.end_headers()
+                self.wfile.write(j)
             elif self.path.startswith("/video"):
                 self.send_response(200)
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=f")
@@ -444,7 +452,7 @@ td{padding:3px 10px;border-bottom:1px solid #2a2f37;font-variant-numeric:tabular
 <ol style="margin:0;color:#c8ccd2;line-height:1.6"><li>Scan, open, accept the warning one last time → <b>Allow</b> the download</li>
 <li>Settings → <b>Profile Downloaded</b> → Install</li><li>Settings → General → About → <b>Certificate Trust Settings</b> → turn on "ai-livestream local CA (LAN only)"</li>
 <li>Valid only for local addresses (192.168.x.x): it can't vouch for any website. Remove any time: Settings → General → VPN &amp; Device Management.</li></ol></div></details>
-<div class="wrap"><img id="v" src="/video"><table id="t"></table></div>
+<div class="wrap"><img id="v" alt=""><table id="t"></table></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 const urls=__URLS__; document.getElementById("urls").innerHTML=urls.map(([n,u])=>`<div>${n}: <code>${u}</code></div>`).join("");
@@ -462,6 +470,10 @@ async function tick(){ const s=await (await fetch("/stats")).json(), p=s.phone||
   ["phone: encoded / sent fps",`${p.enc_fps??"–"} / ${p.sent_fps??"–"}`],["phone: encode time",(p.encode_ms??"–")+" ms"],["phone: socket backlog",(p.ws_buffer??"–")+" bytes"]];
  document.getElementById("t").innerHTML=rows.map(([k,v,cl])=>`<tr><td>${k}</td><td class="${cl||""}">${v}</td></tr>`).join(""); }
 setInterval(tick,1000); tick();
+// preview: poll the latest frame (~15 fps); a failed fetch just retries, so it can't get stuck black
+let lastU=null; async function pv(){ try{ const r=await fetch("/frame.jpg?"+Date.now()); if(r.status===200){ const u=URL.createObjectURL(await r.blob());
+  const im=document.getElementById("v"); im.src=u; if(lastU) URL.revokeObjectURL(lastU); lastU=u; } }catch(e){} setTimeout(pv,66); }
+pv();
 </script></body></html>"""
 
 if __name__ == "__main__":

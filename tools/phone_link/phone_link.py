@@ -105,6 +105,7 @@ class Link:
         self.last_seq, self.dropped, self.frames, self.kind = None, 0, 0, None
         self.phone = {}
         self.http_last = self.http_ping = 0.0
+        self.raw_out = set()
         self.csv = open(OUT / "frames.csv", "w")
         self.csv.write("t_arrival_ms,seq,key,bytes,latency_ms,decode_ms,rtt_ms\n")
 
@@ -119,6 +120,10 @@ class Link:
         key, rot = flags & 1, (flags >> 1) & 3
         data = m[1 + HDR.size:]
         self.kind = "jpeg" if jpeg else "h264"
+        if not jpeg:
+            for wr in list(self.raw_out):        # --raw-port viewers (ffplay): the phone's H.264 as it came
+                if wr.transport.get_write_buffer_size() < 4_000_000:
+                    wr.write(data)
         if self.last_seq is not None and seq > self.last_seq + 1:
             self.dropped += seq - self.last_seq - 1
         self.last_seq = seq
@@ -211,7 +216,7 @@ class Link:
                 out = b""
                 if method == "POST" and path.startswith(f"/up?t={self.a.token}"):
                     if time.time() - self.http_last > 2:
-                        print("[link] phone on the HTTP fallback (no WebSocket)", flush=True)
+                        print("[link] phone connected (https)", flush=True)
                         self.dec = av.CodecContext.create("h264", "r")
                     self.http_last = time.time()
                     i = 0
@@ -237,6 +242,16 @@ class Link:
         finally:
             w.close()
 
+    async def raw_viewer(self, r, w):
+        self.raw_out.add(w)
+        print("[link] raw H.264 viewer connected (picture starts at the next keyframe, <= 2 s)", flush=True)
+        try:
+            await r.read()
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            self.raw_out.discard(w)
+
     def stats(self):
         now = time.time()
         arr = [t for t in self.arr if now - t < 3]
@@ -245,7 +260,7 @@ class Link:
         alat = np.array(self.alat)
         br = sum(n for t, n in self.bytes if now - t < 3) * 8 / 3 / 1e6
         pct = lambda x, p: None if not len(x) else round(float(np.percentile(x, p)), 1)  # noqa: E731
-        via = "websocket" if self.ws is not None else ("http fallback" if now - self.http_last < 2 else None)
+        via = "websocket" if self.ws is not None else ("https" if now - self.http_last < 2 else None)
         return {"connected": via is not None, "transport": via, "kind": self.kind,
                 "fps": round(len(arr) / 3, 1) if arr else 0.0,
                 "latency_ms": {"p50": pct(lat, 50), "p90": pct(lat, 90), "p99": pct(lat, 99), "max": pct(lat, 100)},
@@ -341,7 +356,9 @@ async def main():
     ap.add_argument("--port", type=int, default=8446)
     ap.add_argument("--view-port", type=int, default=8782)
     ap.add_argument("--iface", default=None, help="show the URL for this interface first (e.g. the Beryl dongle)")
-    ap.add_argument("--bitrate", type=int, default=3_000_000)
+    ap.add_argument("--bitrate", type=int, default=4_000_000)
+    ap.add_argument("--raw-port", type=int, default=8790, help="the phone's H.264 untouched on tcp://127.0.0.1:PORT "
+                    "(ffplay -f h264 tcp://127.0.0.1:8790 -vf transpose=1)")
     ap.add_argument("--token", default=None)
     a = ap.parse_args()
     a.token = a.token or secrets.token_urlsafe(9)
@@ -352,12 +369,15 @@ async def main():
     link = Link(a)
     laptop_server(link, a.view_port, urls)
     ctx = cert([ip for _, ip in order])
+    await asyncio.start_server(link.raw_viewer, "127.0.0.1", a.raw_port)
     await asyncio.start_server(link.http_uplink, "0.0.0.0", a.port + 3, ssl=ctx, limit=16 * 2**20)
     async with serve(link.handler, "0.0.0.0", a.port, ssl=ctx, process_request=link.http,
                      max_size=8 * 2**20, ping_interval=20):
         for name, u in urls:
             print(f"[link] phone URL via {name}: {u}", flush=True)
         print(f"[link] laptop view + numbers: http://127.0.0.1:{a.view_port}", flush=True)
+        print(f"[link] raw stream: ffplay -fflags nobuffer -flags low_delay -framedrop -f h264 "
+              f"tcp://127.0.0.1:{a.raw_port} -vf transpose=1", flush=True)
         await asyncio.Future()
 
 
@@ -458,7 +478,7 @@ if(window.QRCode&&urls.length) new QRCode(document.getElementById("qr"),{text:ur
 if(window.QRCode&&urls.length) new QRCode(document.getElementById("qrca"),{text:urls[0][1].replace(/\/[^\/]+$/,"/ca.crt"),width:96,height:96,correctLevel:QRCode.CorrectLevel.M});
 const c=(v,good,ok)=>v==null?"":(v<=good?"ok":v<=ok?"warn":"bad");
 async function tick(){ const s=await (await fetch("/stats")).json(), p=s.phone||{}, L=s.latency_ms, G=s.gap_ms, A=s.audio_latency_ms;
- const rows=[["connected",s.connected?`yes (${s.transport})`:"no",s.connected?(s.transport==="websocket"?"ok":"warn"):"bad"],["stream",s.kind||"–"],["phone camera",p.camera||"–"],
+ const rows=[["connected",s.connected?`yes (${s.transport})`:"no",s.connected?"ok":"bad"],["stream",s.kind||"–"],["phone camera",p.camera||"–"],
   ["fps received",s.fps,s.fps>=25?"ok":s.fps>=20?"warn":"bad"],
   ["latency p50 / p90 / p99 / max (ms)",`${L.p50??"–"} / ${L.p90??"–"} / ${L.p99??"–"} / ${L.max??"–"}`,c(L.p90,50,80)],
   ["arrival gap p50 / p90 / max (ms)",`${G.p50??"–"} / ${G.p90??"–"} / ${G.max??"–"}`,c(G.max,60,120)],

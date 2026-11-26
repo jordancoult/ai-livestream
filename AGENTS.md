@@ -17,6 +17,8 @@ least the upper body with arms). Others so far: prompt-driven "dream"/world gene
 characters live (JoyAI appearance + lpfast + RVC voice + personality/name), `tools/character_live.py <name>`;
 characters in `characters/` (README there). Driver: the Nuance persona (default) or the user themself
 (`--driver webcam|phone|srt`: their camera = source video, their mic = source voice -> the character's voice).
+Phone camera: `--driver phonecam` (Safari page, hardware H.264 over HTTPS on the Beryl LAN, ~25 ms phone -> laptop);
+see tools/phone_link/README.md (network safety for the Seattle phone, local CA, measurements). Console: tools/character_console.py.
 
 Read next: `cloud/README.md` (cloud overview + pipeline index) · `README_QUICKSTART.md` (local setup, benchmarks,
 patches) · `cloud/docs/lessons.md` (hard-won rules).

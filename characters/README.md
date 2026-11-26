@@ -68,3 +68,13 @@ mic -> bridge -> voice stage -> delay line -> phone) with level meters and backl
 | Name | Persona | Notes |
 |---|---|---|
 | karen | mira | first character (2026-11-25); voice v3 (Applio + TITAN 48k, epoch 275; v2 kept on HF); lpfast preset `karen` (mouth 1.08x the driver, gaze stable) |
+
+## Voices (switch live in the console's Voice dropdown)
+
+`voices/catalog.json` lists the voices: `off` (your own voice, in sync), `karen` (RVC), generic `girl` / `guy` (CMU
+ARCTIC slt / bdl, free for any purpose incl. commercial; Seed-VC from a 20 s clip until RVC models are trained). A
+character's `voice.kind`: `rvc` (trained model), `seedvc` (zero-shot from a 1-30 s clip, `reference_clip`) or `none`.
+Only one voice server runs on the GPU box at a time; switching unloads the old one (muted ~10-25 s meanwhile).
+Seed-VC on a box: `POD_FILE=cloud/infra/.pod.joyai bash tools/seedvc_live/setup_box.sh` (GPL-3.0 code).
+Face pass presets (`cloud/lpfast/presets.json`) switch live in the console's Face pass dropdown; characters default to
+`karen` (G-Star: `gstar`).

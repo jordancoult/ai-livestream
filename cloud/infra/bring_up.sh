@@ -12,6 +12,10 @@ for f in cloud/infra/vast_watchdog.sh cloud/infra/vast_heartbeat.sh; do put $f /
 [ "${WATCHDOG:-1}" = 1 ] && P 'cd /workspace && touch .heartbeat && (setsid nohup bash vast_watchdog.sh 45 6 > watchdog.log 2>&1 < /dev/null &) && (setsid nohup bash vast_heartbeat.sh > /dev/null 2>&1 < /dev/null &); echo watchdog on'
 case $NAME in
   joyai)
+    # acceptance check before the ~20 min install (power cap, sustained speed, memory, PCIe, CPU, RAM): FORCE=1 skips
+    if [ "${FORCE:-0}" != 1 ] && ! bash cloud/infra/box_check.sh "$POD_FILE"; then
+      echo "bring_up: box_check rejected this box (destroy it, add its machine_id to cloud/infra/vast_blacklist.txt; FORCE=1 to override)"; exit 1
+    fi
     for f in cloud/pipelines/joyai/setup.sh cloud/pipelines/joyai/run_server.sh cloud/pipelines/joyai/save_cache.sh; do put $f /workspace/; done
     put cloud/pipelines/joyai/prompts /workspace/
     P 'mkdir -p /root/.cache/huggingface /workspace/logs'; put .secrets/hf_token /root/.cache/huggingface/token

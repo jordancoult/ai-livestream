@@ -292,11 +292,17 @@ function send(tag,cap,sq,key,data){ if(!ws||ws.readyState!==1)return; if(ws.buff
 function connect(){ ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); ws.binaryType="arraybuffer";
   ws.onmessage=e=>{const d=new DataView(e.data); if(d.getUint8(0)===80){ // 'P' ping: echo with our clock
       const o=new ArrayBuffer(17), v=new DataView(o); v.setUint8(0,81); v.setFloat64(1,d.getFloat64(1,true),true); v.setFloat64(9,now(),true); ws.send(o);} };
+  ws.onopen=()=>report({hello:navigator.userAgent, webcodecs:"VideoEncoder" in window, rvfc:"requestVideoFrameCallback" in HTMLVideoElement.prototype});
   ws.onclose=()=>setTimeout(connect,1000); }
-$("go").onclick=async()=>{ $("go").hidden=true;
+function report(o){ if(ws&&ws.readyState===1) ws.send(new TextEncoder().encode("S"+JSON.stringify(o))); }
+function fail(where,e){ const m=`${where}: ${e&&e.name?e.name+": ":""}${e&&e.message||e}`; $("st").textContent="ERROR "+m; $("go").hidden=false; report({error:m}); }
+window.addEventListener("error",e=>fail("page",e.error||e.message)); window.addEventListener("unhandledrejection",e=>fail("page",e.reason));
+connect();   // the socket first: the laptop sees the phone (and any error) even before Start
+$("go").onclick=()=>start().catch(e=>fail("start",e));
+async function start(){ $("go").hidden=true; $("st").textContent="starting camera…";
   const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:960},height:{ideal:720},frameRate:{ideal:30}},
      audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
-  const v=$("me"); v.srcObject=s; await v.play(); connect();
+  const v=$("me"); v.srcObject=s; await v.play().catch(()=>{}); if(!v.videoWidth) await new Promise(r=>v.onloadedmetadata=r);
   const st=s.getVideoTracks()[0].getSettings(); let W=v.videoWidth&~1, H=v.videoHeight&~1;
   if("VideoEncoder" in window){
     kind="h264 (WebCodecs, hardware)";
@@ -329,8 +335,8 @@ $("go").onclick=async()=>{ $("go").hidden=true;
   setInterval(()=>{ const dt=(now()-fpsT)/1000; fpsT=now(); const em=encMs.length?encMs.reduce((a,b)=>a+b)/encMs.length:0;
     const rep={kind, camera:`${st.width}x${st.height} @ ${st.frameRate||"?"} fps`, enc_fps:+(nEnc/dt).toFixed(1), sent_fps:+(nSent/dt).toFixed(1), encode_ms:+em.toFixed(1), ws_buffer:ws?ws.bufferedAmount:0};
     nEnc=0; nSent=0; $("st").textContent=Object.entries(rep).map(([k,v])=>`${k}: ${v}`).join("\n");
-    if(ws&&ws.readyState===1) ws.send(new TextEncoder().encode("S"+JSON.stringify(rep))); },1000);
-};
+    report(rep); },1000);
+}
 </script></body></html>"""
 
 LAPTOP_PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Phone Link</title>
@@ -354,6 +360,7 @@ async function tick(){ const s=await (await fetch("/stats")).json(), p=s.phone||
   ["arrival gap p50 / p90 / max (ms)",`${G.p50??"–"} / ${G.p90??"–"} / ${G.max??"–"}`,c(G.max,60,120)],
   ["mic latency p50 / p90 (ms)",`${A.p50??"–"} / ${A.p90??"–"}`],["dropped frames",s.dropped],["bitrate",s.mbit_s+" Mbit/s"],
   ["laptop decode",(s.decode_ms??"–")+" ms"],["clock sync round trip",(s.clock_rtt_ms??"–")+" ms"],
+  ["phone",p.error?`<span class="bad">${p.error}</span>`:(p.hello?`${p.hello.match(/OS [\d_]+/)?.[0]||""} · WebCodecs ${p.webcodecs?"yes":"no"} · rVFC ${p.rvfc?"yes":"no"}`:"–")],
   ["phone: encoded / sent fps",`${p.enc_fps??"–"} / ${p.sent_fps??"–"}`],["phone: encode time",(p.encode_ms??"–")+" ms"],["phone: socket backlog",(p.ws_buffer??"–")+" bytes"]];
  document.getElementById("t").innerHTML=rows.map(([k,v,cl])=>`<tr><td>${k}</td><td class="${cl||""}">${v}</td></tr>`).join(""); }
 setInterval(tick,1000); tick();

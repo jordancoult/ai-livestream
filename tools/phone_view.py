@@ -26,6 +26,8 @@ import collections
 import urllib.request
 from pathlib import Path
 
+import struct
+
 import cv2
 import numpy as np
 
@@ -39,11 +41,19 @@ CAM_W, CAM_H = 480, 640  # camera frames handed on (nuance_source CAM_W/CAM_H)
 DRV_W, DRV_H = 720, 960  # --drive-srt: the phone camera as the pipeline's source video (3:4 portrait)
 
 
-def lan_ip():
-    """The Wi-Fi address (a VPN such as Mullvad owns the default route, so ask the interfaces, wl* first)."""
+def lan_ip(iface=None):
+    """The address the phone should open. Order: --iface; the Beryl LAN (192.168.8.0/24: the Seattle phone's only
+    network -- it must never be offered another); Wi-Fi (wl*); Ethernet. (A VPN may own the default route, so ask the
+    interfaces.)"""
     rows = [ln.split() for ln in subprocess.run(["ip", "-o", "-4", "addr", "show"], capture_output=True,
                                                  text=True).stdout.splitlines()]
     addrs = [(r[1], r[3].split("/")[0]) for r in rows if len(r) > 3]
+    for name, ip in addrs:
+        if iface and name == iface:
+            return ip
+    for name, ip in addrs:
+        if ip.startswith("192.168.8."):
+            return ip
     for pref in ("wl", "en", "eth"):
         for name, ip in addrs:
             if name.startswith(pref) and not ip.startswith("127."):
@@ -65,6 +75,24 @@ def cert(ip):
     return ctx
 
 
+class Clock:
+    """Phone clock -> laptop clock: offset from the ping with the smallest round trip (last ~30 s)."""
+
+    def __init__(self):
+        self.samples = collections.deque(maxlen=60)
+
+    def add(self, t_send, t_phone, t_recv):
+        rtt = t_recv - t_send
+        self.samples.append((rtt, t_phone - (t_send + rtt / 2)))
+
+    def offset(self):
+        return min(self.samples)[1] if self.samples else None
+
+
+DRV_HDR = struct.Struct("<dIB")    # phone page 'H': capture time (phone clock, ms), seq, flags (bit0 key, bits1-2 rot)
+FWD_HDR = struct.Struct("<IdB")    # to the bridge: length, capture time (laptop clock, ms), flags
+
+
 class Hub:
     def __init__(self, a):
         self.a, self.clients, self.loop = a, set(), None
@@ -74,6 +102,11 @@ class Hub:
         self.cnt = {k: 0 for k in ("cam_in", "mic_in", "video_out", "audio_out")}
         self.rates, self.t_rate = {}, time.time()
         self.mic_rms = collections.deque(maxlen=25)
+        self.cam_gaps, self.t_cam = collections.deque(maxlen=150), None   # camera frame arrival gaps (burstiness)
+        self.clock = Clock()
+        self.h264_out = set()       # --drive-h264-port readers (the bridge)
+        self.link_ms = collections.deque(maxlen=150)   # phone capture -> here (ms)
+        self.want_key = False
         self.phone = {}        # what the page reports (audio buffer, frames shown, output latency, sync offset)
         self.n_cam = 0
         self.mic = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1",
@@ -90,7 +123,12 @@ class Hub:
     def stats(self):
         self.tick()
         m = max(self.mic_rms) if self.mic_rms else 0
-        return {"clients": len(self.clients), "rates": self.rates,
+        g = sorted(self.cam_gaps)
+        burst = {"gap_p50_ms": round(g[len(g) // 2] * 1000), "gap_p90_ms": round(g[int(len(g) * 0.9)] * 1000),
+                 "gap_max_ms": round(g[-1] * 1000)} if len(g) > 20 else None
+        lk = sorted(self.link_ms)
+        link = {"p50": round(lk[len(lk) // 2]), "p90": round(lk[int(len(lk) * 0.9)]), "max": round(lk[-1])} if len(lk) > 20 else None
+        return {"clients": len(self.clients), "rates": self.rates, "cam_arrival": burst, "link_ms": link,
                 "mic_db": round(20 * np.log10(max(1e-5, m)), 1), "phone": self.phone, "drive": bool(self.a.drive_srt)}
 
     def broadcast(self, data, video=False):
@@ -154,6 +192,8 @@ class Hub:
             self.clients.discard(old)
             asyncio.ensure_future(old.close(1000, "replaced by a newer connection"))
         self.clients.add(ws)
+        ping_task = asyncio.create_task(self.pinger(ws))
+        self.want_key = True
         print(f"[phone] connected ({len(self.clients)})", flush=True)
         try:
             async for m in ws:
@@ -170,11 +210,61 @@ class Hub:
                         self.phone = {**json.loads(m[1:].decode()), "t": time.time()}
                     except ValueError:
                         pass
+                elif m[:1] == b"Q":
+                    t_send, t_phone = struct.unpack_from("<dd", m, 1)
+                    self.clock.add(t_send, t_phone, time.time() * 1000)
+                elif m[:1] == b"H":
+                    self.h264(m)
+                    if self.want_key:
+                        self.want_key = False
+                        await ws.send(b"K")
                 elif m[:1] == b"C" and (self.cam_out or self.a.drive_srt):
                     self.camera_frame(m[1:])
         finally:
+            ping_task.cancel()
             self.clients.discard(ws)
             print(f"[phone] disconnected ({len(self.clients)})", flush=True)
+
+    def h264(self, m):
+        """The phone's hardware H.264 (WebCodecs), passed to the bridge with its capture time on the laptop clock."""
+        now = time.time() * 1000
+        cap, _seq, flags = DRV_HDR.unpack_from(m, 1)
+        data = m[1 + DRV_HDR.size:]
+        off = self.clock.offset()
+        cap_l = now if off is None else cap - off
+        if off is not None:
+            self.link_ms.append(now - cap_l)
+        self.cnt["cam_in"] += 1
+        if self.t_cam:
+            self.cam_gaps.append(now / 1000 - self.t_cam)
+        self.t_cam = now / 1000
+        pkt = FWD_HDR.pack(len(data), cap_l, flags) + data
+        for wr in list(self.h264_out):
+            if wr.transport.get_write_buffer_size() > 2_000_000:
+                continue
+            wr.write(pkt)
+        self.n_cam += 1
+        if self.n_cam == 1:
+            print("[phone] camera (H.264) -> the pipeline", flush=True)
+
+    async def h264_reader(self, r, w):
+        self.h264_out.add(w)
+        self.want_key = True        # a new decoder needs a keyframe: ask the phone for one now
+        print("[phone] H.264 reader connected (the bridge)", flush=True)
+        try:
+            await r.read()
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            self.h264_out.discard(w)
+
+    async def pinger(self, ws):
+        while True:
+            try:
+                await ws.send(b"P" + struct.pack("<d", time.time() * 1000))
+            except Exception:  # noqa: BLE001
+                return
+            await asyncio.sleep(0.5)
 
     def drive(self, img):
         """The phone camera as the source video: raw frames -> x264 -> SRT (the bridge listens)."""
@@ -192,6 +282,10 @@ class Hub:
 
     def camera_frame(self, jpg):
         self.cnt["cam_in"] += 1
+        now = time.time()
+        if self.t_cam:
+            self.cam_gaps.append(now - self.t_cam)
+        self.t_cam = now
         img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             return
@@ -245,8 +339,10 @@ class Hub:
                                                                ("Content-Length", str(len(body)))]), body)
         if req.path.split("?")[0] == "/" and f"t={self.a.token}" in req.path:
             body = (PAGE.replace("__TOKEN__", self.a.token).replace("__TITLE__", self.a.title)
-                    .replace("__CAMERA__", "true" if self.a.camera_port or self.a.drive_srt else "false")
-                    .replace("__DRIVE__", "true" if self.a.drive_srt else "false")).encode()
+                    .replace("__CAMERA__", "true" if self.a.camera_port or self.a.drive_srt or self.a.drive_h264_port
+                             else "false")
+                    .replace("__DRIVE__", "true" if self.a.drive_srt or self.a.drive_h264_port else "false")
+                    .replace("__H264__", "true" if self.a.drive_h264_port else "false")).encode()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "text/html; charset=utf-8"),
                                                                ("Cache-Control", "no-store"),
                                                                ("Content-Length", str(len(body)))]), body)
@@ -265,17 +361,24 @@ async def main():
     ap.add_argument("--title", default="Character")
     ap.add_argument("--drive-srt", default=None, help="the phone camera becomes the source video: H.264 over SRT to "
                     "this URL (caller), e.g. srt://127.0.0.1:9024 (the bridge's --input srt://0.0.0.0:9024)")
+    ap.add_argument("--iface", default=None, help="offer the phone this interface's address (default: the Beryl LAN "
+                    "if present, else Wi-Fi)")
+    ap.add_argument("--drive-h264-port", type=int, default=0, help="the phone camera becomes the source video as the "
+                    "phone's own H.264 (WebCodecs) with capture times, served to the bridge on tcp://127.0.0.1:PORT "
+                    "(bridge --input h264tcp://127.0.0.1:PORT)")
     ap.add_argument("--camera-port", type=int, default=0, help="hand the phone camera on to tcp://127.0.0.1:PORT "
                     "(0 = the page doesn't ask for the camera)")
     a = ap.parse_args()
     a.token = a.token or secrets.token_urlsafe(9)
-    ip = lan_ip()
+    ip = lan_ip(a.iface)
     hub = Hub(a)
     hub.loop = asyncio.get_running_loop()
     threading.Thread(target=hub.video_thread, daemon=True).start()
     threading.Thread(target=hub.audio_thread, daemon=True).start()
     if a.camera_port:
         await asyncio.start_server(hub.camera_reader, "127.0.0.1", a.camera_port)
+    if a.drive_h264_port:
+        await asyncio.start_server(hub.h264_reader, "127.0.0.1", a.drive_h264_port)
     async with serve(hub.handler, "0.0.0.0", a.port, ssl=cert(ip), process_request=hub.http, max_size=2**20,
                      ping_interval=20):
         print(f"[phone] open on the phone (same Wi-Fi): https://{ip}:{a.port}/?t={a.token}", flush=True)
@@ -306,7 +409,8 @@ cancels echo, but speakers can still leak into the mic).</p></div>
 <label id="sync" title="Voice comes late (e.g. Bluetooth earbuds): slide right. Voice early: slide left.">sync
 <input id="off" type="range" min="-400" max="400" step="20" value="0"><span id="offv">0</span></label><span id="st"></span></div>
 <script>
-const T="__TOKEN__", CAM=__CAMERA__, DRIVE=__DRIVE__, $=id=>document.getElementById(id);
+const T="__TOKEN__", CAM=__CAMERA__, DRIVE=__DRIVE__, H264=__H264__, $=id=>document.getElementById(id);
+const nowMs=()=>performance.timeOrigin+performance.now(); let forceKey=false;
 let ctx, ws, micOn=true, playAt=0, frames=[], lastURL=null, rx=0, lag=0.15, userOff=0;
 try{userOff=+localStorage.getItem("avoff")||0;}catch(e){}
 // the picture is shown when its audio is heard: audio buffered + the device's audio output latency (+ user's offset,
@@ -315,6 +419,9 @@ function outLat(){return (ctx.outputLatency||0)+(ctx.baseLatency||0);}
 function connect(){
   ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); ws.binaryType="arraybuffer";
   ws.onmessage=e=>{const b=new Uint8Array(e.data), k=b[0];
+    if(k===80){ // 'P' clock ping: echo with our clock (the laptop maps capture times onto its own)
+      const o=new ArrayBuffer(17), v=new DataView(o); v.setUint8(0,81); v.setFloat64(1,new DataView(e.data).getFloat64(1,true),true); v.setFloat64(9,nowMs(),true); ws.send(o); return;}
+    if(k===75){ forceKey=true; return; }   // 'K': the pipeline (re)connected and needs a keyframe
     if(k===65){ // 'A' audio: s16le 48 kHz mono, scheduled with a small jitter buffer
       const s=new Int16Array(e.data.slice(1)), buf=ctx.createBuffer(1,s.length,48000), d=buf.getChannelData(0);
       for(let i=0;i<s.length;i++)d[i]=s[i]/32768;
@@ -343,10 +450,27 @@ $("start").onclick=async()=>{
   ctx=new (window.AudioContext||window.webkitAudioContext)(); await ctx.resume();
   let stream;
   const ac={echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1};
-  try{stream=await navigator.mediaDevices.getUserMedia(CAM?{audio:ac,video:DRIVE?{facingMode:"user",width:{ideal:1280},height:{ideal:960},frameRate:{ideal:30}}:{facingMode:"user",width:{ideal:640},height:{ideal:480}}}:{audio:ac});}
+  try{stream=await navigator.mediaDevices.getUserMedia(CAM?{audio:ac,video:DRIVE?{facingMode:"user",width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30}}:{facingMode:"user",width:{ideal:640},height:{ideal:480}}}:{audio:ac});}
   catch(e){alert("Microphone/camera blocked: "+e.message); $("start").disabled=false; $("start").textContent="Start talking to __TITLE__"; return;}
-  if(CAM&&stream.getVideoTracks().length){ // JPEG frames: ~15 fps for the persona to see you, 30 fps when your
-                                          // camera IS the source video (DRIVE)
+  if(CAM&&stream.getVideoTracks().length&&H264&&!("VideoEncoder" in window)){ alert("This browser has no WebCodecs video encoder (needed to drive the character)."); }
+  if(CAM&&stream.getVideoTracks().length&&H264&&("VideoEncoder" in window)){
+    // your camera IS the source video: the phone's hardware H.264 encoder on the raw (sensor-oriented) frames, each
+    // stamped with its capture time; the laptop rotates upright and measures the latency from capture
+    const me=$("me"); me.srcObject=stream; me.hidden=false; await me.play().catch(()=>{});
+    if(!me.videoWidth) await new Promise(r=>me.onloadedmetadata=r);
+    const probe=new VideoFrame(me,{timestamp:0}); const FW=probe.displayWidth&~1, FH=probe.displayHeight&~1; probe.close();
+    const ROT=((FW>FH)!==(me.videoWidth>me.videoHeight))?1:0, q=[]; let sq=0;
+    const enc=new VideoEncoder({output:ch=>{const c=q.shift()||{}; const b=new Uint8Array(14+ch.byteLength), v=new DataView(b.buffer);
+        v.setUint8(0,72); v.setFloat64(1,c.cap||nowMs(),true); v.setUint32(9,c.sq||0,true); v.setUint8(13,(ch.type==="key"?1:0)|(ROT<<1));
+        ch.copyTo(b.subarray(14)); if(ws&&ws.readyState===1&&ws.bufferedAmount<2e6) ws.send(b);}, error:e=>alert("encoder: "+e.message)});
+    enc.configure({codec:"avc1.42E01F",width:FW,height:FH,bitrate:4000000,framerate:30,latencyMode:"realtime",hardwareAcceleration:"prefer-hardware",avc:{format:"annexb"}});
+    const step=(t,meta)=>{ if(enc.encodeQueueSize<2){ const cap=meta&&meta.captureTime?performance.timeOrigin+meta.captureTime:nowMs();
+        const f=new VideoFrame(me,{timestamp:Math.round((meta&&meta.mediaTime||t/1000)*1e6)}); sq++; q.push({cap,sq});
+        enc.encode(f,{keyFrame:forceKey||sq%60===1}); forceKey=false; f.close(); }
+      me.requestVideoFrameCallback(step); };
+    me.requestVideoFrameCallback(step);
+  } else if(CAM&&stream.getVideoTracks().length){ // JPEG frames: ~15 fps for the persona to see you (or the
+                                          // older JPEG drive path)
     const me=$("me"); me.srcObject=stream; me.hidden=false; await me.play().catch(()=>{});
     const cv=document.createElement("canvas"), g=cv.getContext("2d"); let busy=false;
     setInterval(()=>{ if(busy||!ws||ws.readyState!==1||!me.videoWidth||ws.bufferedAmount>300000)return;

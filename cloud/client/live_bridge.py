@@ -214,14 +214,17 @@ class Source:
 
     def __init__(self, spec):
         self.spec = spec
-        self.net = spec.split("://")[0].lower() in NET_SCHEMES
+        self.h264 = spec.startswith("h264tcp://")   # the phone page's own H.264 + capture times (tools/phone_view.py)
+        self.net = spec.split("://")[0].lower() in NET_SCHEMES or self.h264
+        self.cap_of = {}        # h264tcp: id(frame) -> its capture time (laptop clock), for t_capture
         self.live = spec.startswith("/dev/video") or self.net
         self.stamps = collections.deque(maxlen=90)
+        self.stale = 0          # live frames dropped as older than 120 ms when read (bursty arrival)
         if self.net:
             self.latest, self.n, self.n_read, self.proc = None, 0, 0, None
             self.pending = collections.deque(maxlen=12)  # (arrival time, frame)
             self.cv = threading.Condition()
-            threading.Thread(target=self._grab_net, daemon=True).start()
+            threading.Thread(target=self._grab_h264 if self.h264 else self._grab_net, daemon=True).start()
             import atexit
             atexit.register(lambda: self.proc and self.proc.poll() is None and self.proc.kill())
             return
@@ -256,6 +259,67 @@ class Source:
             if "latency=" not in u:  # SRT buffers max(sender, receiver) latency; ffmpeg's default 120 ms is a fixed
                 u += "&latency=20000"  # delay for local senders (UxPlay); a phone app asking more still gets it (us)
         return u
+
+    def _grab_h264(self):
+        """Phone page H.264 (tools/phone_view.py --drive-h264-port): <len u32, capture ms f64 (laptop clock), flags u8>
+        + Annex-B packet. Decoded here once (no JPEG -> x264 -> SRT -> ffmpeg loop), rotated upright (the phone sends
+        sensor-oriented frames), cropped to the session's orientation; reconnects."""
+        import socket
+        import struct
+        hdr = struct.Struct("<IdB")
+        host, port = self.spec.split("://", 1)[1].split(":")
+        iw, ih = (720, 1280) if args.portrait else (1280, 720)
+        rots = (None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+        def recv(s, n):
+            b = bytearray()
+            while len(b) < n:
+                c = s.recv(n - len(b))
+                if not c:
+                    raise ConnectionError
+                b += c
+            return bytes(b)
+        print(f"[bridge] waiting for the phone's H.264 on {self.spec}", flush=True)
+        while True:
+            try:
+                s = socket.create_connection((host, int(port)), timeout=5)
+                s.settimeout(None)
+                dec, got = av.CodecContext.create("h264", "r"), 0
+                while True:
+                    n, cap, flags = hdr.unpack(recv(s, hdr.size))
+                    data = recv(s, n)
+                    try:
+                        frs = dec.decode(av.Packet(data))
+                    except av.error.InvalidDataError:
+                        continue
+                    for fr in frs:
+                        img = fr.to_ndarray(format="bgr24")
+                        rot = (flags >> 1) & 3
+                        if rot:
+                            img = cv2.rotate(img, rots[rot])
+                        h, w = img.shape[:2]
+                        sc = max(iw / w, ih / h)          # cover, then centre crop (= the SRT path's "crop" fit)
+                        img = cv2.resize(img, (round(w * sc), round(h * sc)), interpolation=cv2.INTER_AREA)
+                        y0, x0 = (img.shape[0] - ih) // 2, (img.shape[1] - iw) // 2
+                        f = np.ascontiguousarray(img[y0:y0 + ih, x0:x0 + iw])
+                        if not got:
+                            print(f"[bridge] phone H.264 connected: {w}x{h} (rotation {rot * 90} deg) -> {iw}x{ih}",
+                                  flush=True)
+                        got += 1
+                        now = time.time()
+                        self.stamps.append(now)
+                        with self.cv:
+                            self.latest, self.n = f, self.n + 1
+                            self.pending.append((now, f))
+                            self.cap_of[id(f)] = cap / 1000
+                            if len(self.cap_of) > 64:
+                                live = {id(x) for _, x in self.pending}
+                                self.cap_of = {k: v for k, v in self.cap_of.items() if k in live}
+                            self.cv.notify_all()
+                        if self.on_frame is not None:
+                            self.on_frame(now, f)
+            except (OSError, ConnectionError, struct.error):
+                time.sleep(1)
 
     def _grab_net(self):
         """Phone / network stream through the system ffmpeg (has SRT), scaled+cropped to 720p in the session's
@@ -373,8 +437,12 @@ class Source:
                 now = time.time()
                 while len(self.pending) > 1 and now - self.pending[0][0] > 0.12:
                     self.pending.popleft()
+                    self.stale += 1
                 self.n_read = self.n
                 self.last_arrival, f = self.pending.popleft()
+                cap = self.cap_of.pop(id(f), None)
+                if cap is not None:          # h264tcp: latency counts from the phone camera's capture
+                    self.last_arrival = cap
                 return f
         want = int((time.time() - self.t0) * self.src_fps)  # real-time pacing for files
         f = None
@@ -683,6 +751,7 @@ async def main():
     stats = collections.Counter()
     lat = []
     rt_lat = collections.deque(maxlen=250)    # JoyAI round trip per frame (console: where the latency is)
+    send_times = collections.deque(maxlen=100)   # frames actually sent to JoyAI (console: send rate)
     from av_sync import AVSync
     if args.monitor_source == "airplay":
         args.monitor_source = "airplay_audio.monitor"
@@ -788,6 +857,7 @@ async def main():
                     seq += 1
                     await ws.send(json.dumps({"type": "frame_meta", "seq": seq, "t_capture_ms": t_arr * 1000}))
                     await ws.send(data)
+                    send_times.append(time.time())
                     next_send = max(next_send + 1.0 / args.fps, time.time() - 0.2)
                     await asyncio.sleep(max(0.0, next_send - time.time()))
 
@@ -856,6 +926,9 @@ async def main():
                       "repeated": stats["repeated"], "dropped": stats["dropped"], "server_fps": round(sfps, 1),
                       "g2g_ms": round(l[len(l) // 2]) if l else None,
                       "joyai_rt_ms": round(sorted(rt_lat)[len(rt_lat) // 2]) if rt_lat else None,
+                      "send_fps": round((len(send_times) - 1) / (send_times[-1] - send_times[0]), 1)
+                      if len(send_times) > 10 and send_times[-1] > send_times[0] else None,
+                      "input_stale": getattr(src, "stale", 0),
                       "session": {k: start.get(k) for k in ("kv_reset_frames", "freeze_kv_on_static", "detection_mode")},
                       "facefix_available": ff is not None, "facefix_on": sess["ff_on"], "input_fps": src.fps(),
                       "input_live": src.live, "sync": sync.status()}

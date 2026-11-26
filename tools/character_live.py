@@ -53,6 +53,11 @@ PORT = 9024
 #  the phone path adds ~+30); set to 85 total: stream ~0, phone slightly late (the natural direction)
 SYNC_SRT_DRIVER_MS = 50
 SYNC_REMOTE_VOICE_MS = 35
+#  - phonecam (the phone page's own H.264, h264tcp input): the video latency is measured from the phone camera's
+#    capture, the mic audio only from its arrival (~30 ms later) -> without a correction it plays ~30 ms late
+#    (ESTIMATE, to be measured with a flash/beep run like the SRT driver's)
+SYNC_PHONE_H264_MS = -30
+H264_PORT = 9026
 CAM_PORT = 9025   # --phone: the phone camera -> the Nuance persona (it sees you)
 
 
@@ -131,7 +136,7 @@ def main():
         env["PULSE_SINK"] = "char_out"
     run_s = a.seconds if a.test else a.max_seconds
     if live_self:
-        inp = (a.camera if a.driver == "webcam" else f"srt://0.0.0.0:{PORT}" if a.driver == "phonecam"
+        inp = (a.camera if a.driver == "webcam" else f"h264tcp://127.0.0.1:{H264_PORT}" if a.driver == "phonecam"
                else f"srt://0.0.0.0:{a.srt_port}")
         mon = a.mic
     else:
@@ -148,7 +153,7 @@ def main():
               "--seconds", str(int(run_s + 40)) if a.test else "0"]
     if a.voice_host and not a.no_voice:
         bridge += ["--voice-host", a.voice_host]
-    av_off = (0 if live_self and a.driver != "phonecam" else SYNC_SRT_DRIVER_MS) + (SYNC_REMOTE_VOICE_MS if a.voice_host and not a.no_voice else 0)
+    av_off = (SYNC_PHONE_H264_MS if live_self and a.driver == "phonecam" else 0 if live_self else SYNC_SRT_DRIVER_MS) + (SYNC_REMOTE_VOICE_MS if a.voice_host and not a.no_voice else 0)
     bridge += ["--monitor-offset-ms", str(av_off)]
     if not a.no_face_pass:
         bridge += ["--facefix-preset", c["face_pass"]["lpfast_preset"]]
@@ -181,8 +186,7 @@ def main():
             pv = subprocess.Popen([PY, str(REPO / "tools/phone_view.py"), "--out-sink", "phone_out", "--mic-sink",
                                    "phone_mic", "--port", str(a.phone_port), "--dashboard", str(a.dashboard),
                                    "--title", c["name"]] + (["--camera-port", str(CAM_PORT)] if a.driver == "nuance" else [])
-                                  + (["--drive-srt", f"srt://127.0.0.1:{PORT}?mode=caller&latency=20"]
-                                     if a.driver == "phonecam" and not a.test else []), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                  + (["--drive-h264-port", str(H264_PORT)] if a.driver == "phonecam" and not a.test else []), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             procs.insert(0, pv)
             for line in pv.stdout:
                 print(line.rstrip(), flush=True)

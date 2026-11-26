@@ -6,7 +6,7 @@
     "prompt_file": "cloud/pipelines/joyai/prompts/replace.txt"
   },
   "face_pass": {
-    "lpfast_preset": "karen"
+    "lpfast_preset": "gstar"
   },
   "voice": {
     "kind": "none",

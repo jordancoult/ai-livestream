@@ -60,7 +60,7 @@ alone.
 |---|---|---|---|
 | 156320 | California | REJECT | 400/575 W cap: GEMM 192 TFLOPS @ 2.3 GHz, JoyAI 23.4 fps box-local (DiT 302 ms/chunk) |
 | 147713 | Texas | REJECT | 450/600 W cap: GEMM 200 TFLOPS @ 2.4 GHz, PCIe 14 GB/s |
-| 136976 | Texas | ACCEPT | 575/575 W, GEMM 227 TFLOPS, PCIe 52.6 GB/s, CPU 0.093 s |
+| 136976 | Texas | ACCEPT | 575/575 W (2.7 GHz sustained), GEMM 227 TFLOPS, PCIe 52.6 GB/s, CPU 0.093 s: JoyAI box-local 28.0-28.4 fps, 479-485 ms; live with the Karen ref 0.317 s/chunk (25 fps), glass-to-glass 904 ms |
 
 Other files: `vast.sh` (search / create / show / destroy), `pod.sh` (ssh/scp to the current box), `tunnel.sh`
 (laptop:18080 -> box:8080), `providers.md` (provider notes), `artifacts.md` (what lives on the HF artifacts repo).

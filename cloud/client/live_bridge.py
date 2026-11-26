@@ -796,7 +796,8 @@ async def main():
     lat = []
     rt_lat = collections.deque(maxlen=250)    # JoyAI round trip per frame (console: where the latency is)
     send_times = collections.deque(maxlen=100)   # frames actually sent to JoyAI (console: send rate)
-    voice_state = {"name": args.voice_name}     # the live voice (survives JoyAI session restarts)
+    voice_state = {"name": args.voice_name,     # the live voice + face-pass preset (survive JoyAI session restarts)
+                   "facefix_preset": getattr(args, "facefix_preset", None)}
     from av_sync import AVSync
     if args.monitor_source == "airplay":
         args.monitor_source = "airplay_audio.monitor"
@@ -998,7 +999,7 @@ async def main():
                       if len(send_times) > 10 and send_times[-1] > send_times[0] else None,
                       "input_stale": getattr(src, "stale", 0),
                       "session": {k: start.get(k) for k in ("kv_reset_frames", "freeze_kv_on_static", "detection_mode")},
-                      "voice_name": voice_state["name"],
+                      "voice_name": voice_state["name"], "facefix_preset": voice_state["facefix_preset"],
                       "voice_switching": sync.monitor.switching if sync.monitor else None,
                       "voice_switch_failed": sync.monitor.switch_failed if sync.monitor else None,
                       "facefix_available": ff is not None, "facefix_on": sess["ff_on"], "input_fps": src.fps(),
@@ -1071,6 +1072,7 @@ async def main():
                     try:
                         if "preset" in cmd:
                             ff.lp.apply_preset(cmd["preset"])
+                            voice_state["facefix_preset"] = cmd["preset"]
                             ff.lp.pose = False  # JoyAI output already moves the head
                         if cmd.get("gains"):
                             ff.lp.set_gain(**{k: float(v) for k, v in cmd["gains"].items()})

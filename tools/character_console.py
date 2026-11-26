@@ -284,6 +284,8 @@ class H(BaseHTTPRequestHandler):
             if (REPO / "characters" in p.parents or REPO / "assets" in p.parents) and p.is_file():
                 ct = {".png": "image/png", ".webp": "image/webp"}.get(p.suffix.lower(), "image/jpeg")
                 return self._send(200, p.read_bytes(), ct)
+        if self.path == "/api/lpfast_presets":
+            return self._send(200, json.dumps(sorted(json.loads((REPO / "cloud/lpfast/presets.json").read_text()))))
         if self.path == "/api/voices":
             cat = json.loads((REPO / "voices" / "catalog.json").read_text())
             return self._send(200, json.dumps({k: v.get("label", k) for k, v in cat.items() if not k.startswith("_")}))
@@ -309,6 +311,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(apply_look(a)))
         if self.path == "/api/bypass":    # face pass bypass: JoyAI output goes straight out
             return self._send(200, json.dumps(bridge_cmd({"facefix": not a.get("on")})))
+        if self.path == "/api/lpfast":    # live face-pass preset (cloud/lpfast/presets.json)
+            return self._send(200, json.dumps(bridge_cmd({"preset": a.get("name", "")})))
         if self.path == "/api/voice":     # live voice switch (voices/catalog.json)
             return self._send(200, json.dumps(bridge_cmd({"voice_select": a.get("name", "")})))
         if self.path == "/api/avchain":
@@ -378,6 +382,8 @@ pre{margin:0;max-height:240px;overflow:auto;font:11px/1.45 ui-monospace,monospac
     <button id="apply" class="b2">Apply live</button><button id="reset" class="b2" title="Resets JoyAI memory and recalibrates the face pass: look at the camera with a neutral face">Reset memory + neutral</button>
     <label title="Switch the voice live: the old voice unloads, the new one loads (~10-25 s, muted meanwhile)">Voice
      <select id="voicesel"><option value="">…</option></select></label><span id="voicest" style="color:var(--dim);font-size:12px"></span>
+    <label title="Face pass (lpfast) settings preset, applied live">Face pass
+     <select id="lpsel"><option value="">…</option></select></label>
     <button id="bypass" class="b3" title="Skip the face pass: the JoyAI output is sent out directly">Bypass face pass: off</button>
     <button id="revert" class="b3">Revert to preset</button><button id="save" class="b3">Save to preset</button>
     <span id="lookmsg" style="color:var(--dim)"></span></div>
@@ -434,9 +440,15 @@ async function avStep(d){ if(avChain==null) return; const r=await (await fetch("
 $("av_m").onclick=()=>avStep(-50); $("av_p").onclick=()=>avStep(50);
 (async()=>{ try{ const v=await (await fetch("/api/voices")).json();
   $("voicesel").innerHTML='<option value="">— pick to switch —</option>'+Object.entries(v).map(([k,l])=>`<option value="${k}">${l}</option>`).join(""); }catch(_){} })();
-$("voicesel").onchange=async()=>{ const n=$("voicesel").value; if(!n) return;
+let voicePick=null, lpPick=null;   // the user's last pick wins until the bridge reports it
+$("voicesel").onchange=async()=>{ const n=$("voicesel").value; if(!n) return; voicePick=n;
   const r=await (await fetch("/api/voice",{method:"POST",body:JSON.stringify({name:n})})).json();
-  msg(r.error||"switching voice… (muted while it loads)", r.error?"var(--bad)":"var(--ok)"); $("voicesel").value=""; };
+  msg(r.error||"switching voice… (muted while it loads)", r.error?"var(--bad)":"var(--ok)"); };
+(async()=>{ try{ const p=await (await fetch("/api/lpfast_presets")).json();
+  $("lpsel").innerHTML=p.map(k=>`<option value="${k}">${k}</option>`).join(""); }catch(_){} })();
+$("lpsel").onchange=async()=>{ const n=$("lpsel").value; lpPick=n;
+  const r=await (await fetch("/api/lpfast",{method:"POST",body:JSON.stringify({name:n})})).json();
+  msg(r.error||`face pass preset: ${n}`, r.error?"var(--bad)":"var(--ok)"); };
 let bypassOn=false;
 $("bypass").onclick=async()=>{ const r=await (await fetch("/api/bypass",{method:"POST",body:JSON.stringify({on:!bypassOn})})).json();
   if(r.error) msg(r.error,"var(--bad)"); else { bypassOn=!bypassOn; showBypass(); } };
@@ -468,7 +480,14 @@ async function tick(){
   if(s.bridge&&s.bridge.sync&&s.bridge.sync.chain_ms!=null){ avChain=s.bridge.sync.chain_ms; $("av_v").textContent=(avChain>0?"+":"")+avChain+" ms"; }
   if(s.bridge){ const b=s.bridge; $("voicest").textContent=b.voice_switching?`loading ${b.voice_switching}…`:
      b.voice_switch_failed?`switch failed: ${b.voice_switch_failed}`:`now: ${b.voice_name||"–"}`;
-     $("voicest").style.color=b.voice_switch_failed?"var(--bad)":b.voice_switching?"var(--warn,orange)":"var(--dim)"; }
+     $("voicest").style.color=b.voice_switch_failed?"var(--bad)":b.voice_switching?"var(--warn,orange)":"var(--dim)";
+     // keep the dropdowns on what is live (the voice name may be "<character> (character)" before any switch)
+     const vs=$("voicesel"), cur=b.voice_switching||b.voice_name||"";
+     if(voicePick&&cur===voicePick) voicePick=null;
+     if(document.activeElement!==vs){ const key=voicePick||([...vs.options].some(o=>o.value===cur)?cur:(cur.includes("(character)")&&cur.toLowerCase().startsWith("karen")?"karen":(cur==="off"?"off":"")));
+       vs.value=key; if(!key&&vs.options[0]) vs.options[0].textContent=cur?`${cur}`:"— pick to switch —"; }
+     const ls=$("lpsel"); if(lpPick&&b.facefix_preset===lpPick) lpPick=null;
+     if(document.activeElement!==ls&&(lpPick||b.facefix_preset)) ls.value=lpPick||b.facefix_preset; }
   if(s.bridge&&s.bridge.facefix_available){ bypassOn=!s.bridge.facefix_on; showBypass(); }
   const b=s.bridge, p=s.phone, sy=b&&b.sync||{}, lv=sy.levels||{}, fl=sy.flow||{}, vo=sy.voice||{}, mo=sy.monitor||{};
   const up=!!b; if(up!==dashUp){views(up); dashUp=up;}

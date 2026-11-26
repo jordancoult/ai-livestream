@@ -524,8 +524,9 @@ cancels echo, but speakers can still leak into the mic).</p></div>
 <div id="camctl" hidden><div id="cams"></div><div id="camrow"><input id="zoom" type="range" hidden><span id="zoomv"></span><button id="rot">↻ rotate</button></div></div>
 <div id="resume" hidden><button id="resumeb">Tap to resume sound</button></div>
 <div id="ui" hidden><button id="mute">Mic on</button><button id="camb" class="gray" hidden>Camera</button>
-<label id="sync" title="Voice comes late (e.g. Bluetooth earbuds): slide right. Voice early: slide left.">sync
-<input id="off" type="range" min="-400" max="400" step="20" value="0"><span id="offv">0</span></label><span id="st"></span></div>
+<button id="syncb" class="gray">Sync 0</button>
+<label id="sync" hidden title="Voice comes late (e.g. Bluetooth earbuds): slide right. Voice early: slide left.">
+<input id="off" type="range" min="-400" max="400" step="20" value="0"><button id="off0" class="gray">0</button></label><span id="st"></span></div>
 <script>
 __CAM_JS__
 const T="__TOKEN__", CAM=__CAMERA__, DRIVE=__DRIVE__, H264=__H264__, HP=__HTTP_PORT__, $=id=>document.getElementById(id);
@@ -613,8 +614,12 @@ document.addEventListener("touchend",()=>{ if(ctx&&ctx.state!=="running") ctx.re
 $("resumeb").onclick=async()=>{ await ctx.resume().catch(()=>{}); $("resume").hidden=ctx.state==="running"; };
 $("camb").onclick=()=>{ $("camctl").hidden=!$("camctl").hidden; };
 $("mute").onclick=()=>{micOn=!micOn; $("mute").textContent=micOn?"Mic on":"Mic muted"; $("mute").className=micOn?"":"off";};
-$("off").value=userOff; $("offv").textContent=userOff;
-$("off").oninput=e=>{userOff=+e.target.value; $("offv").textContent=userOff; try{localStorage.setItem("avoff",userOff);}catch(_){}};
+// the slider hides behind the Sync button (a stray swipe on the always-visible slider set -400 unnoticed, 2026-11-26)
+function setOff(v){ userOff=v; $("off").value=v; $("syncb").textContent="Sync "+(v>0?"+":"")+v; try{localStorage.setItem("avoff",v);}catch(_){} }
+setOff(userOff);
+$("syncb").onclick=()=>{ $("sync").hidden=!$("sync").hidden; };
+$("off").oninput=e=>setOff(+e.target.value);
+$("off0").onclick=()=>setOff(0);
 // resilience: coming back to the tab (or reopening the page) restores camera, sound and the link by itself
 let wl=null; async function wake(){ try{ if(!wl||wl.released) wl=await navigator.wakeLock.request("screen"); }catch(_){} }
 function revive(){ if(document.visibilityState!=="visible"||!started) return;

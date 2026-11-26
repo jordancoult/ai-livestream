@@ -554,7 +554,10 @@ setInterval(()=>{ if(!started) return;
   $("st").textContent=(Date.now()-okT<2000?"connected":"reconnecting…")+` · ${(rx*8/1e6/2).toFixed(1)} Mbit/s`; rx=0; },2000);
 async function start(){ if(started) return; started=true;
   $("start").disabled=true; $("start").textContent="Starting…";
-  ctx=new (window.AudioContext||window.webkitAudioContext)(); await ctx.resume().catch(()=>{});
+  // never wait for the audio to unlock: iOS only allows it after a tap, and an automatic start (page reopened) has
+  // none -- the page then hung at "Starting..." (2026-11-26). Camera, mic and link start regardless; sound resumes
+  // on the next tap ("Tap to resume sound").
+  ctx=new (window.AudioContext||window.webkitAudioContext)(); ctx.resume().catch(()=>{});
   const ac={echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1};
   try{
     if(CAM&&H264){ // your camera IS the source video: any of the phone's cameras, hardware H.264, capture times
@@ -580,8 +583,9 @@ async function start(){ if(started) return; started=true;
   }catch(e){ started=false; $("start").disabled=false; $("start").textContent="Start talking to __TITLE__"; alert("Camera/microphone: "+(e.message||e)); return; }
   $("go").hidden=true; $("ui").hidden=false; requestAnimationFrame(show); wake();
   try{localStorage.setItem("autostart","1")}catch(_){}
-  if(ctx.state!=="running") $("resume").hidden=false; }
-$("start").onclick=()=>start();
+  setTimeout(()=>{ if(ctx.state!=="running") $("resume").hidden=false; },600); }
+$("start").onclick=()=>{ if(ctx&&ctx.state!=="running") ctx.resume().catch(()=>{}); if(!started) start(); };
+document.addEventListener("touchend",()=>{ if(ctx&&ctx.state!=="running") ctx.resume().then(()=>{$("resume").hidden=ctx.state==="running";}).catch(()=>{}); },{passive:true});
 $("resumeb").onclick=async()=>{ await ctx.resume().catch(()=>{}); $("resume").hidden=ctx.state==="running"; };
 $("camb").onclick=()=>{ $("camctl").hidden=!$("camctl").hidden; };
 $("mute").onclick=()=>{micOn=!micOn; $("mute").textContent=micOn?"Mic on":"Mic muted"; $("mute").className=micOn?"":"off";};

@@ -445,7 +445,7 @@ async function start(){ if(started) return; started=true; $("go").hidden=true; $
   wake();
   // mic separately (a camera switch never touches it): timestamped PCM (48 kHz s16)
   const s=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
-  const ctx=new AudioContext(); await ctx.resume(); const src=ctx.createMediaStreamSource(s), pr=ctx.createScriptProcessor(1024,1,1), r=48000/ctx.sampleRate;
+  const ctx=new AudioContext(); ctx.resume().catch(()=>{});   // never wait on it (no tap on an automatic start) const src=ctx.createMediaStreamSource(s), pr=ctx.createScriptProcessor(1024,1,1), r=48000/ctx.sampleRate;
   pr.onaudioprocess=e=>{ if(!ws||ws.readyState!==1)return; const x=e.inputBuffer.getChannelData(0), n=Math.floor(x.length*r), o=new Int16Array(n);
     for(let i=0;i<n;i++)o[i]=Math.max(-1,Math.min(1,x[Math.min(x.length-1,Math.floor(i/r))]))*32767;
     const cap=now()-1000*x.length/ctx.sampleRate, b=new Uint8Array(9+o.byteLength), dv=new DataView(b.buffer); dv.setUint8(0,65); dv.setFloat64(1,cap,true); b.set(new Uint8Array(o.buffer),9); ws.send(b);};

@@ -205,6 +205,12 @@ def crop_resize(frame, w, h):
 NET_SCHEMES = ("srt", "rtmp", "rtsp", "udp", "tcp")
 
 
+class InputPaused(Exception):
+    """A network input (phone) stopped sending: the JoyAI session is closed until frames return. (A JoyAI session
+    that gets no frames mid-chunk freezes -- no more chunks, missed keepalive pings -- seen 2026-11-26 when the phone
+    left for 10 s: the pipeline never recovered. A fresh session when the phone returns costs ~2 s.)"""
+
+
 class Source:
     """Input: a v4l2 camera, a live network stream (phone: srt:// / rtmp:// / rtsp:// / udp://, see
     cloud/docs/iphone-camera.md) or a file/URL played in real time. Live sources are drained by a thread and read()
@@ -829,6 +835,7 @@ async def main():
 
             async def sender():
                 seq, next_send = 0, time.time()
+                last_frame = time.time()
                 while not stop.is_set():
                     if t_end and time.time() > t_end:
                         quit_ev.set()
@@ -837,8 +844,11 @@ async def main():
                     frame = await asyncio.to_thread(src.read) if src.live else src.read()
                     t_arr = src.last_arrival if src.live and src.last_arrival else time.time()
                     if frame is None:
+                        if src.net and seq and time.time() - last_frame > 1.5:
+                            raise InputPaused()
                         await asyncio.sleep(0.005)
                         continue
+                    last_frame = time.time()
                     frame = crop_resize(frame, sess["w"], sess["h"])
                     views["input"] = frame
                     if ff is not None:
@@ -857,6 +867,8 @@ async def main():
                     seq += 1
                     await ws.send(json.dumps({"type": "frame_meta", "seq": seq, "t_capture_ms": t_arr * 1000}))
                     await ws.send(data)
+                    if not send_times or time.time() - send_times[-1] > 1.0:
+                        sess["send_resume"] = time.time()          # sending (re)started after a pause
                     send_times.append(time.time())
                     next_send = max(next_send + 1.0 / args.fps, time.time() - 0.2)
                     await asyncio.sleep(max(0.0, next_send - time.time()))
@@ -1102,6 +1114,25 @@ async def main():
                     else:
                         await apply({"prompt": line})
 
+            async def stall_watch():
+                """Frames going out but nothing coming back for STALL_S: restart the JoyAI session (~1-2 s). Seen
+                2026-11-26: the phone left for 10 s, came back, and the server never produced another chunk on the
+                still-open connection; nothing else noticed."""
+                STALL_S = 4.0
+                last_restart = 0.0
+                while not stop.is_set():
+                    await asyncio.sleep(1.0)
+                    now = time.time()
+                    if sess["state"] != "running" or not send_times or now - send_times[-1] > 1.0:
+                        continue                                    # not sending (no input): nothing to expect
+                    last_in = recv_times[-1] if recv_times else 0.0
+                    sending_for = now - max(last_in, last_restart, sess.get("send_resume", now))
+                    if now - last_in > STALL_S and sending_for > STALL_S and now - last_restart > 8:
+                        last_restart = now
+                        stats["stall_restarts"] += 1
+                        await restart_session(f"JoyAI stalled ({now - last_in:.0f} s without output while sending): "
+                                              f"restarting the session")
+
             async def pinger():
                 while not stop.is_set():
                     await ws.send(json.dumps({"type": "ping", "t": time.time() * 1000, "recv": received}))
@@ -1236,7 +1267,7 @@ async def main():
                               flush=True)
 
             try:
-                tasks = [asyncio.create_task(c()) for c in (sender, receiver, pinger, player, controller)]
+                tasks = [asyncio.create_task(c()) for c in (sender, receiver, pinger, player, controller, stall_watch)]
                 await asyncio.gather(*tasks)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 quit_ev.set()
@@ -1256,6 +1287,10 @@ async def main():
                 if args.save_input:
                     with open(str(Path(args.save_input).with_suffix(".json")), "w") as f:
                         json.dump({"source_seq": played_seq, "facefix": played_ff, "arrivals": arrivals}, f)
+      except InputPaused:
+        print("[bridge] input paused: JoyAI session closed until the frames come back", flush=True)
+        queue.clear()
+        await asyncio.sleep(0.2)
       except (websockets.exceptions.WebSocketException, OSError, asyncio.TimeoutError) as e:
         if quit_ev.is_set() or args.no_reconnect:
             raise

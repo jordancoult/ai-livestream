@@ -317,7 +317,7 @@ pre{font:13px ui-monospace,monospace;white-space:pre-wrap}</style></head><body>
 <div id="camrow"><input id="zoom" type="range" hidden><span id="zoomv"></span><button id="rot">↻ rotate</button></div><div id="sock" style="font:13px ui-monospace,monospace;margin:6px 0;color:#e0a03a">socket: –</div><pre id="st">Camera + mic go to the laptop only (local network).</pre></div>
 <script>
 __CAM_JS__
-const T="__TOKEN__", BR=__BITRATE__, $=id=>document.getElementById(id); let cam=null;
+const T="__TOKEN__", BR=__BITRATE__, $=id=>document.getElementById(id); var cam=null, wsT0=Date.now(), started=false;
 const now=()=>performance.timeOrigin+performance.now();
 let ws, enc=null, seq=0, nEnc=0, nSent=0, encMs=[], kind="", fpsT=now();
 function hdr(tag,cap,sq,key){const b=new ArrayBuffer(14); const v=new DataView(b); v.setUint8(0,tag); v.setFloat64(1,cap,true); v.setUint32(9,sq,true); v.setUint8(13,key===true?1:(key|0)); return new Uint8Array(b);}
@@ -337,14 +337,12 @@ window.addEventListener("error",e=>fail("page",e.error||e.message)); window.addE
 connect();   // the socket first: the laptop sees the phone (and any error) even before Start
 $("go").onclick=()=>start().then(()=>{try{localStorage.setItem("autostart","1")}catch(_){}}).catch(e=>fail("start",e));
 // resilience: a stuck socket is retried, and coming back to the tab (or reopening the page) restores everything
-let wsT0=Date.now();
 setInterval(()=>{ if(ws&&ws.readyState===0&&Date.now()-wsT0>4000){ try{ws.close()}catch(_){} } },1000);
 function revive(){ if(document.visibilityState!=="visible") return;
   if(!ws||ws.readyState>1) connect();
   if(cam) cam.ensure(); wake(); }
 document.addEventListener("visibilitychange",revive); window.addEventListener("pageshow",revive); window.addEventListener("focus",revive);
 let wl=null; async function wake(){ try{ if(!wl||wl.released) wl=await navigator.wakeLock.request("screen"); }catch(_){} }
-let started=false;
 try{ if(localStorage.getItem("autostart")) setTimeout(()=>{ if(!started) start().catch(()=>{ $("go").hidden=false; sock("tap Start (iOS wants a tap)"); }); },300); }catch(_){}
 async function start(){ if(started) return; started=true; $("go").hidden=true; $("st").textContent="starting camera…";
   if(!("VideoEncoder" in window)) throw new Error("this browser has no WebCodecs video encoder");

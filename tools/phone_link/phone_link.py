@@ -223,16 +223,16 @@ class Link:
             body = CA_DER.read_bytes()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "application/x-x509-ca-cert"),
                                                                ("Content-Disposition", 'attachment; filename="ai-livestream-local-ca.crt"'),
-                                                               ("Content-Length", str(len(body)))]), body)
+                                                               ("Content-Length", str(len(body))), ("Connection", "close")]), body)
         p = req.path.split("?")[0]
         if (p == "/" and f"t={self.a.token}" in req.path) or p.rstrip("/") == f"/{self.a.token}":
             body = PHONE_PAGE.replace("__TOKEN__", self.a.token).replace("__BITRATE__", str(self.a.bitrate)).encode()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "text/html; charset=utf-8"),
                                                                ("Cache-Control", "no-store"),
-                                                               ("Content-Length", str(len(body)))]), body)
+                                                               ("Content-Length", str(len(body))), ("Connection", "close")]), body)
         body = b"<h2 style='font-family:system-ui'>Wrong link: open the full link the laptop shows (it ends with a code).</h2>"
         return Response(http.HTTPStatus.NOT_FOUND, "Not Found", Headers([("Content-Type", "text/html"),
-                                                                         ("Content-Length", str(len(body)))]), body)
+                                                                         ("Content-Length", str(len(body))), ("Connection", "close")]), body)
 
 
 def laptop_server(link, port, urls):

@@ -351,12 +351,12 @@ class Hub:
             body = CA_DER.read_bytes()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "application/x-x509-ca-cert"),
                                                                ("Content-Disposition", 'attachment; filename="ai-livestream-local-ca.crt"'),
-                                                               ("Content-Length", str(len(body)))]), body)
+                                                               ("Content-Length", str(len(body))), ("Connection", "close")]), body)
 
         if req.path.split("?")[0] == "/stats" and f"t={self.a.token}" in req.path:
             body = json.dumps(self.stats()).encode()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "application/json"),
-                                                               ("Content-Length", str(len(body)))]), body)
+                                                               ("Content-Length", str(len(body))), ("Connection", "close")]), body)
         if req.path.split("?")[0] == "/" and f"t={self.a.token}" in req.path:
             body = (PAGE.replace("__TOKEN__", self.a.token).replace("__TITLE__", self.a.title)
                     .replace("__CAMERA__", "true" if self.a.camera_port or self.a.drive_srt or self.a.drive_h264_port
@@ -365,8 +365,8 @@ class Hub:
                     .replace("__H264__", "true" if self.a.drive_h264_port else "false")).encode()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "text/html; charset=utf-8"),
                                                                ("Cache-Control", "no-store"),
-                                                               ("Content-Length", str(len(body)))]), body)
-        return Response(http.HTTPStatus.NOT_FOUND, "Not Found", Headers([("Content-Length", "0")]), b"")
+                                                               ("Content-Length", str(len(body))), ("Connection", "close")]), body)
+        return Response(http.HTTPStatus.NOT_FOUND, "Not Found", Headers([("Content-Length", "0"), ("Connection", "close")]), b"")
 
 
 async def main():

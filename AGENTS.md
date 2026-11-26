@@ -49,3 +49,4 @@ patches) · `cloud/docs/lessons.md` (hard-won rules).
   created.
 
 - Output to OBS / TikTok / video calls (virtual camera AI_Scope_Cam, phone_out sink, Character_Mic): `docs/obs.md`.
+- Voices: `voices/catalog.json` (live switching in the console; RVC or Seed-VC, one server on the box at a time) and characters: `characters/README.md`. Box state and resume steps: `cloud/infra/README.md` ("Current box").

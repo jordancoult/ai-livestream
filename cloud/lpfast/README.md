@@ -192,3 +192,17 @@ Result, realistic network profile (a stall every ~10 s): 94-97% refined, the res
 Bridge flags (defaults = the fix): `--facefix-patch 1`, `--facefix-catchup drop`, `--rebuffer` (2 with a face pass),
 `--facefix-wait-running 15`, `--facefix-blend-back 3`, `--facefix-serial` (old non-overlapped pass); `--save-input`
 JSON now logs per-frame `shown` (refined/patched/held/raw) and the server's frame `arrivals`.
+
+## Robustness (2026-11-26)
+
+- **Driver face reference = median of 15 frontal frames** (|yaw| <= 12, |pitch| <= 15). It used to be one frame; a bad
+  lock-on frame warped every later frame ("mushed" output) until a reset. The console's "Reset memory + neutral"
+  re-takes it (and forgets the learned baselines).
+- **Output quality gate:** every render is scored against the JoyAI frame (face-area 48x48 correlation). Below 0.86
+  the JoyAI frame is shown instead (from that frame on); after 3 good frames it crossfades back (4 frames). ~1 s of
+  failures re-takes the face reference automatically. Calibrated on a replayed Karen session: clean 0.918-0.95
+  (0 rejected), a skewed reference 0.857-0.90. The bridge logs `[facefix] OFF ... render quality ... (showing JoyAI)`.
+- **Gates:** Karen's preset src_yaw 30-45 / drv_yaw 32-45 (38-55 re-rendered turned faces: warped). `[facefix] OFF`
+  log lines name the gate that turned the pass off (your face or the character's).
+- Presets switch live (console Face pass dropdown / bridge `{"preset": name}`); characters default to `karen`
+  (G-Star: `gstar`).

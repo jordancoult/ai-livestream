@@ -54,6 +54,22 @@ give ~27 fps (base model, its sample reference).
 `vast_blacklist.txt`: machine IDs never to rent, with date and reason. `vast.sh check-gpu`: the power-limit check
 alone.
 
+## Current box (2026-11-26): STOPPED, ready to resume
+
+Vast instance **62741894** (Texas, machine 136976, RTX 5090, accepted by box_check), stopped 2026-11-26 after the
+session; ~$0.06/h storage while stopped. Installed: JoyAI (bring_up.sh joyai), RVC voice server + Karen (voice_up.sh),
+Seed-VC (tools/seedvc_live/setup_box.sh). Resume:
+
+```bash
+bash cloud/infra/vast.sh start 62741894          # if the host's GPU was taken meanwhile, Vast keeps it queued:
+                                                 # rent a new box instead (box_trial.sh) and re-run the three setups
+bash cloud/infra/vast.sh show                    # new IP/port after a restart -> update cloud/infra/.pod.joyai
+bash cloud/infra/bring_up.sh joyai               # (re)starts the JoyAI server (the install is kept)
+POD_FILE=cloud/infra/.pod.joyai bash cloud/infra/tunnel.sh start
+cloud/facefix/.venv/bin/python tools/character_console.py   # -> http://127.0.0.1:8780, Start
+```
+Destroy it instead (no storage cost) when it won't be used for days: `bash cloud/infra/vast.sh destroy 62741894`.
+
 ## Measured boxes
 
 | Machine | Where | Verdict | Notes |

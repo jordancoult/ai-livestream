@@ -43,6 +43,7 @@ REPO = Path(__file__).resolve().parents[1]
 PY = str(REPO / "cloud/facefix/.venv/bin/python")
 NPY = str(REPO / "tools/nuance_live/.venv/bin/python")
 PORT = 9024
+CAM_PORT = 9025   # --phone: the phone camera -> the Nuance persona (it sees you)
 
 
 def load_character(name):
@@ -160,7 +161,7 @@ def main():
         if a.phone:
             pv = subprocess.Popen([PY, str(REPO / "tools/phone_view.py"), "--out-sink", "phone_out", "--mic-sink",
                                    "phone_mic", "--port", str(a.phone_port), "--dashboard", str(a.dashboard),
-                                   "--title", c["name"]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                   "--title", c["name"]] + (["--camera-port", str(CAM_PORT)] if a.driver == "nuance" else []), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             procs.insert(0, pv)
             for line in pv.stdout:
                 print(line.rstrip(), flush=True)
@@ -206,7 +207,8 @@ def main():
                  "--sink", "char_audio", "--persona", conv["persona_id"],
                  "--prompt", (REPO / conv["personality_file"]).read_text().strip(), "--say", conv["first_line"],
                  "--expressiveness", str(conv.get("expressiveness", 1.0)), "--mic", a.mic,
-                 "--max-seconds", str(a.max_seconds)])
+                 "--max-seconds", str(a.max_seconds)]
+                + (["--camera", f"tcp://127.0.0.1:{CAM_PORT}"] if a.phone else []))
         if drv is not br:
             procs.append(drv)
         try:   # the clip streamer can hang on closing its SRT connection after the clip: don't wait for it

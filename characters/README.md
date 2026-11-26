@@ -23,7 +23,7 @@ voice, `voice.pitch_self` semitones up, delayed to stay in sync with the output 
 **From your phone** (`--phone`, either driver): the laptop serves a page on the Wi-Fi (`tools/phone_view.py`, HTTPS
 with a self-signed certificate: accept the warning once; the link carries a token). It shows the character's video
 and plays its voice, in sync; the phone's mic is your voice (to the Nuance persona, or the source voice with a self
-driver). With the Nuance driver the session starts only when the phone connects (no credits spent before).
+driver), and with the Nuance driver the phone's front camera goes to the persona too (`camera: true`: it sees you). With the Nuance driver the session starts only when the phone connects (no credits spent before).
 
     tools/character_live.py karen --phone
 

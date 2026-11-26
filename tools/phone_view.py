@@ -4,6 +4,8 @@
                     the bridge's audio monitor plays into it), over one WebSocket, re-synced on the phone
   phone  -> laptop: the phone's mic (echo-cancelled by the browser) -> PulseAudio sink MIC_SINK; its .monitor is the
                     "mic" the driver listens to (nuance_source --mic MIC_SINK.monitor)
+                    + the phone's front camera (JPEG, ~15 fps) -> raw RGBA 480x640 on tcp://127.0.0.1:CAMERA_PORT
+                    (nuance_source --camera tcp://127.0.0.1:CAMERA_PORT: the persona sees you)
 
 HTTPS with a self-signed certificate (browsers only allow the mic on secure pages): the phone shows a warning once
 (Safari: Show Details -> visit this website). A random token in the link keeps others on the Wi-Fi out.
@@ -22,12 +24,16 @@ import time
 import urllib.request
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 REPO = Path(__file__).resolve().parents[1]
 SR, CHUNK = 48000, 960  # 20 ms audio chunks
+CAM_W, CAM_H = 480, 640  # camera frames handed on (nuance_source CAM_W/CAM_H)
 
 
 def lan_ip():
@@ -59,6 +65,8 @@ def cert(ip):
 class Hub:
     def __init__(self, a):
         self.a, self.clients, self.loop = a, set(), None
+        self.cam_out = set()   # local camera readers (asyncio StreamWriters)
+        self.n_cam = 0
         self.mic = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1",
                                      "--latency-msec=20", "-d", a.mic_sink], stdin=subprocess.PIPE)
 
@@ -122,18 +130,52 @@ class Hub:
         print(f"[phone] connected ({len(self.clients)})", flush=True)
         try:
             async for m in ws:
-                if isinstance(m, bytes) and self.mic.poll() is None:
-                    self.mic.stdin.write(m)
+                if not isinstance(m, bytes) or not m:
+                    continue
+                if m[:1] == b"M" and self.mic.poll() is None:
+                    self.mic.stdin.write(m[1:])
                     self.mic.stdin.flush()
+                elif m[:1] == b"C" and self.cam_out:
+                    self.camera_frame(m[1:])
         finally:
             self.clients.discard(ws)
             print(f"[phone] disconnected ({len(self.clients)})", flush=True)
+
+    def camera_frame(self, jpg):
+        img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+        if img is None:
+            return
+        h, w = img.shape[:2]
+        if w * CAM_H > h * CAM_W:            # crop to 3:4 portrait, then scale
+            nw = h * CAM_W // CAM_H
+            img = img[:, (w - nw) // 2:(w - nw) // 2 + nw]
+        else:
+            nh = w * CAM_H // CAM_W
+            img = img[(h - nh) // 2:(h - nh) // 2 + nh]
+        rgba = cv2.cvtColor(cv2.resize(img, (CAM_W, CAM_H), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGBA)
+        data = rgba.tobytes()
+        for wr in list(self.cam_out):
+            if wr.transport.get_write_buffer_size() > 4 * len(data):
+                continue   # reader behind: drop
+            wr.write(data)
+        self.n_cam += 1
+        if self.n_cam == 1:
+            print("[phone] camera: first frame handed on", flush=True)
+
+    async def camera_reader(self, r, w):
+        self.cam_out.add(w)
+        print("[phone] camera reader connected", flush=True)
+        try:
+            await r.read()     # until it disconnects
+        finally:
+            self.cam_out.discard(w)
 
     def http(self, conn, req):
         if req.path.startswith("/ws"):
             return None  # WebSocket upgrade
         if req.path.split("?")[0] == "/" and f"t={self.a.token}" in req.path:
-            body = PAGE.replace("__TOKEN__", self.a.token).replace("__TITLE__", self.a.title).encode()
+            body = (PAGE.replace("__TOKEN__", self.a.token).replace("__TITLE__", self.a.title)
+                    .replace("__CAMERA__", "true" if self.a.camera_port else "false")).encode()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "text/html; charset=utf-8"),
                                                                ("Cache-Control", "no-store"),
                                                                ("Content-Length", str(len(body)))]), body)
@@ -150,6 +192,8 @@ async def main():
     ap.add_argument("--fps", type=int, default=25)
     ap.add_argument("--token", default=None)
     ap.add_argument("--title", default="Character")
+    ap.add_argument("--camera-port", type=int, default=0, help="hand the phone camera on to tcp://127.0.0.1:PORT "
+                    "(0 = the page doesn't ask for the camera)")
     a = ap.parse_args()
     a.token = a.token or secrets.token_urlsafe(9)
     ip = lan_ip()
@@ -157,6 +201,8 @@ async def main():
     hub.loop = asyncio.get_running_loop()
     threading.Thread(target=hub.video_thread, daemon=True).start()
     threading.Thread(target=hub.audio_thread, daemon=True).start()
+    if a.camera_port:
+        await asyncio.start_server(hub.camera_reader, "127.0.0.1", a.camera_port)
     async with serve(hub.handler, "0.0.0.0", a.port, ssl=cert(ip), process_request=hub.http, max_size=2**20,
                      ping_interval=20):
         print(f"[phone] open on the phone (same Wi-Fi): https://{ip}:{a.port}/?t={a.token}", flush=True)
@@ -175,13 +221,15 @@ button{font:600 16px -apple-system,system-ui;border:0;border-radius:22px;padding
 button.off{background:#8a3b2b} #st{font-size:12px;opacity:.8;flex:1;text-align:right}
 #go{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000}
 #go p{max-width:300px;text-align:center;opacity:.75;margin:0}
+#me{position:fixed;top:calc(10px + env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));width:24vw;
+ max-width:130px;border-radius:10px;transform:scaleX(-1);border:1px solid #fff4;background:#111}
 </style></head><body>
-<img id="v" alt="">
-<div id="go"><button id="start">Start talking to __TITLE__</button><p>Allow the microphone. Earbuds work best (the phone
+<img id="v" alt=""><video id="me" playsinline muted autoplay hidden></video>
+<div id="go"><button id="start">Start talking to __TITLE__</button><p>Allow the microphone (and camera: __TITLE__ sees you). Earbuds work best (the phone
 cancels echo, but speakers can still leak into the mic).</p></div>
 <div id="ui" hidden><button id="mute">Mic on</button><span id="st"></span></div>
 <script>
-const T="__TOKEN__", $=id=>document.getElementById(id);
+const T="__TOKEN__", CAM=__CAMERA__, $=id=>document.getElementById(id);
 let ctx, ws, micOn=true, playAt=0, frames=[], lastURL=null, rx=0, lag=0.15;
 function connect(){
   ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); ws.binaryType="arraybuffer";
@@ -206,13 +254,23 @@ setInterval(()=>{if(ws&&ws.readyState===1)$("st").textContent=`${(rx*8/1e6/2).to
 $("start").onclick=async()=>{
   ctx=new (window.AudioContext||window.webkitAudioContext)(); await ctx.resume();
   let stream;
-  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});}
-  catch(e){alert("Microphone blocked: "+e.message); return;}
+  const ac={echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1};
+  try{stream=await navigator.mediaDevices.getUserMedia(CAM?{audio:ac,video:{facingMode:"user",width:{ideal:640},height:{ideal:480}}}:{audio:ac});}
+  catch(e){alert("Microphone/camera blocked: "+e.message); return;}
+  if(CAM&&stream.getVideoTracks().length){ // the persona sees you: JPEG frames at ~15 fps
+    const me=$("me"); me.srcObject=stream; me.hidden=false; await me.play().catch(()=>{});
+    const cv=document.createElement("canvas"), g=cv.getContext("2d"); let busy=false;
+    setInterval(()=>{ if(busy||!ws||ws.readyState!==1||!me.videoWidth||ws.bufferedAmount>300000)return;
+      const s=Math.min(1,640/Math.max(me.videoWidth,me.videoHeight)); cv.width=me.videoWidth*s|0; cv.height=me.videoHeight*s|0;
+      g.drawImage(me,0,0,cv.width,cv.height); busy=true;
+      cv.toBlob(async b=>{busy=false; if(!b||!ws||ws.readyState!==1)return; const d=new Uint8Array(await b.arrayBuffer()), o=new Uint8Array(d.length+1); o[0]=67; o.set(d,1); ws.send(o);},"image/jpeg",0.7);
+    },66);
+  }
   const src=ctx.createMediaStreamSource(stream), proc=ctx.createScriptProcessor(1024,1,1), r=48000/ctx.sampleRate;
   proc.onaudioprocess=e=>{ if(!ws||ws.readyState!==1)return;
     const x=e.inputBuffer.getChannelData(0), n=Math.floor(x.length*r), o=new Int16Array(n);
     for(let i=0;i<n;i++){const v=micOn?x[Math.min(x.length-1,Math.floor(i/r))]:0; o[i]=Math.max(-1,Math.min(1,v))*32767;}
-    ws.send(o.buffer);};
+    const m=new Uint8Array(1+o.byteLength); m[0]=77; m.set(new Uint8Array(o.buffer),1); ws.send(m);};
   const z=ctx.createGain(); z.gain.value=0; src.connect(proc); proc.connect(z); z.connect(ctx.destination);
   $("go").hidden=true; $("ui").hidden=false; connect(); requestAnimationFrame(show);
   try{await navigator.wakeLock.request("screen");}catch(e){}

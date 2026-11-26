@@ -30,6 +30,9 @@ DEFAULT_PROMPT = ("You are Karen, a warm, chatty livestreamer talking with your 
                   "answers short and natural, like a real conversation.")
 
 
+CAM_W, CAM_H = 480, 640   # user camera frames (portrait 3:4)
+
+
 def log(m):
     print(f"[nuance] {m}", flush=True)
 
@@ -68,7 +71,8 @@ class Nuance:
                 f"{u['active_sessions']}/{u['limits']['concurrent_sessions']}")
             body = {"interface": "nuance_live",
                     "personality": {"persona_id": a.persona, "system_prompt": a.prompt},
-                    "interface_setup": {"delegation": {"type": "none"}, "video": {"input": {"camera": False}}},
+                    "interface_setup": {"delegation": {"type": "none"},
+                                        "video": {"input": {"camera": a.camera != "none"}}},
                     "expressiveness": a.expressiveness, "end_user_id": "ai-livestream-test"}
             r = await self.http(s, "POST", "/session-tokens", self.key, body)
             if r.get("warnings"):
@@ -156,6 +160,13 @@ class Nuance:
         track = rtc.LocalAudioTrack.create_audio_track("microphone", mic)
         await room.local_participant.publish_track(track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
         mic_task = asyncio.create_task(self.mic(mic))
+        cam_task = None
+        if a.camera != "none":   # the user's face: the persona sees them
+            cam = rtc.VideoSource(CAM_W, CAM_H)
+            ctrack = rtc.LocalVideoTrack.create_video_track("camera", cam)
+            await room.local_participant.publish_track(ctrack, rtc.TrackPublishOptions(
+                source=rtc.TrackSource.SOURCE_CAMERA))
+            cam_task = asyncio.create_task(self.camera(cam))
         try:
             await asyncio.wait_for(self.started.wait(), 60)
             if a.say:
@@ -173,6 +184,8 @@ class Nuance:
             except Exception:  # noqa: BLE001
                 pass
             mic_task.cancel()
+            if cam_task:
+                cam_task.cancel()
             await room.disconnect()
             for p in (self.video_proc, self.audio_proc):
                 if p and p.poll() is None:
@@ -215,6 +228,24 @@ class Nuance:
                 await src.capture_frame(rtc.AudioFrame(b, SR, 1, n))
         finally:
             p.kill()
+
+    async def camera(self, src):
+        """The user's camera: raw RGBA frames (CAM_W x CAM_H) from tcp://host:port (tools/phone_view.py
+        --camera-port), forwarded as they come; reconnects."""
+        host, port = self.a.camera.split("://", 1)[1].split(":")
+        n, sent = CAM_W * CAM_H * 4, 0
+        while True:
+            try:
+                r, _w = await asyncio.open_connection(host, int(port))
+                log(f"camera source connected ({self.a.camera})")
+                while True:
+                    b = await r.readexactly(n)
+                    src.capture_frame(rtc.VideoFrame(CAM_W, CAM_H, rtc.VideoBufferType.RGBA, b))
+                    sent += 1
+                    if sent == 1:
+                        log("camera: first frame sent to the persona")
+            except (OSError, asyncio.IncompleteReadError):
+                await asyncio.sleep(1)
 
     async def video(self, track):
         stream = rtc.VideoStream(track, format=rtc.VideoBufferType.RGB24)
@@ -281,6 +312,8 @@ def main():
     ap.add_argument("--say", default="Say hi to your viewers and introduce yourself.",
                     help="first thing the persona says (it never speaks first); '' = wait for you")
     ap.add_argument("--mic", default="default", help="PulseAudio source that talks to the persona, or 'none'")
+    ap.add_argument("--camera", default="none", help="the user's camera for the persona to see: none, or "
+                    f"tcp://HOST:PORT sending raw RGBA {CAM_W}x{CAM_H} frames (tools/phone_view.py --camera-port)")
     ap.add_argument("--max-seconds", type=int, default=300)
     ap.add_argument("--expressiveness", type=float, default=1.0)
     ap.add_argument("--timezone", default="America/Los_Angeles")

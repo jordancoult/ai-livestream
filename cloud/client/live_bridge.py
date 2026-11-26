@@ -703,6 +703,15 @@ async def main():
       try:
         stop = asyncio.Event()                # this session
         stops.append(stop)
+        if src.net:   # network input (phone / Nuance persona): open the JoyAI session only once frames arrive; an
+            waited = False   # idle session stops answering keepalive pings and drops ~40 s later, right when the
+            while not quit_ev.is_set() and (not src.stamps or time.time() - src.stamps[-1] > 2.0):   # stream starts
+                if not waited:
+                    print("[bridge] waiting for input frames before opening the JoyAI session", flush=True)
+                    waited = True
+                await asyncio.sleep(0.2)
+            if quit_ev.is_set():
+                break
         async with websockets.connect(args.url, max_size=64 * 2**20, ping_interval=20) as ws:
             await ws.send(json.dumps(start))
             while True:

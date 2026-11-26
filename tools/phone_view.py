@@ -329,8 +329,17 @@ class Hub:
         self.t_cam = now / 1000
         pkt = FWD_HDR.pack(len(data), cap_l, flags) + data
         for wr in list(self.h264_out):
-            if wr.transport.get_write_buffer_size() > 2_000_000:
+            # never queue: a reader behind by > ~0.3 s of video stops getting packets until the next keyframe (asked
+            # for at once), so it skips ahead instead of building delay (a 2 MB buffer here was ~4 s)
+            if wr.transport.get_write_buffer_size() > 150_000:
+                if not getattr(wr, "skipping", False):
+                    wr.skipping = True
+                    self.down.append(b"K")
                 continue
+            if getattr(wr, "skipping", False):
+                if not flags & 1:
+                    continue
+                wr.skipping = False
             wr.write(pkt)
         self.n_cam += 1
         if self.n_cam == 1:

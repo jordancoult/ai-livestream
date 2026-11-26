@@ -738,12 +738,12 @@ class LPPass:
         self._t("paste", t0, False)
         return res, info
 
-    def patch_last(self, out_bgr, s):
+    def patch_last(self, out_bgr, s, crop=None):
         """A late frame's stand-in: the last rendered face pasted onto THIS frame at its own face position (from
         `analyze`, cheap) instead of a full render (~2-4 ms vs ~35). Head motion stays live, the expression is a
         frame or two old: no flash to the raw frame, no frozen picture. None if there is nothing to paste."""
-        crop = self._last_crop
-        if crop is None or s is None or self.w <= 0:
+        crop = self._last_crop if crop is None else crop   # pass the crop of the frame on screen: the newest render
+        if crop is None or s is None or self.w <= 0:      # can be a frame AHEAD (renders run ahead of playback)
             return None
         return self._paste(out_bgr, crop, s["M_c2o"])
 

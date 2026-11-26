@@ -484,6 +484,9 @@ class FaceFixer:
         # instead of a spiral of late frames (2026-11-25)
         self.pool_an = ThreadPoolExecutor(1) if not args.facefix_serial else None
         self.playing_seq = None   # source_seq of the frame the player is showing now (deadline checks)
+        self.shown_crop = None    # face (512 crop) of the last refined frame SHOWN: what a missed frame holds
+        self.crops = collections.OrderedDict()   # seq -> its rendered face (the last 24)
+        self.crop_lock = threading.Lock()
         self.jobs = collections.OrderedDict()   # seq -> job (a miss cancels the next unstarted render)
         self.inputs = collections.OrderedDict()          # seq -> future of the driver analysis
         self.stats = collections.Counter()
@@ -581,6 +584,10 @@ class FaceFixer:
             else:
                 res, info = self.lp.render(out, fd.result())
             job["t_done"] = time.time()
+            with self.crop_lock:                 # this frame's face (same GPU thread, right after its render)
+                self.crops[seq] = self.lp._last_crop
+                while len(self.crops) > 24:
+                    self.crops.popitem(last=False)
             self.ms.append(1000 * (time.perf_counter() - t0))
             job["info"] = {k: info.get(k) for k in ("ok", "w", "held", "detected") if info.get(k) is not None}
             return res
@@ -609,6 +616,10 @@ class FaceFixer:
         if f.done() and f.exception() is None and f.result() is not None:
             self.stats["hit"] += 1
             self.last_info = job.get("info")
+            with self.crop_lock:
+                c = self.crops.get(job.get("seq"))
+            if c is not None:
+                self.shown_crop = c
             return f.result()
         if f.done() and f.exception() is not None:
             self.stats["error"] += 1
@@ -627,7 +638,9 @@ class FaceFixer:
         an = job.get("an")
         if args.facefix_patch and an is not None and an.done() and an.exception() is None:
             try:
-                res = self.lp.patch_last(job["out"], an.result())
+                # hold the expression on screen: the face of the last frame SHOWN, not the newest render (renders
+                # run ahead of playback; pasting a frame from the future, then going back, was a one-frame break)
+                res = self.lp.patch_last(job["out"], an.result(), crop=self.shown_crop)
             except Exception as e:  # noqa: BLE001
                 res = None
                 print("[bridge] facefix patch error:", repr(e), flush=True)

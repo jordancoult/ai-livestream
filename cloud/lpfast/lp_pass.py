@@ -215,6 +215,7 @@ class Face:
             c, s_ = np.cos(-ang), np.sin(-ang)
             rel = np.array([[c, -s_], [s_, c]]) @ (center - ce) / iod
             self.crop_ref = {"rel": rel, "size": (256.0 / sc) / iod, "dth": th - ang}
+            self.ref_new = True          # Driver.analyze drops it again unless this frame is frontal
             return M
         r = self.crop_ref
         c, s_ = np.cos(ang), np.sin(ang)
@@ -320,6 +321,10 @@ class Driver:
             if lmk is None:
                 return None
             m = self.face.motion(bgr, lmk)
+            if getattr(self.face, "ref_new", False):    # neutral calibration only from a frontal face
+                self.face.ref_new = False
+                if abs(float(m["yaw"])) > 12 or abs(float(m["pitch"])) > 15:
+                    self.face.crop_ref = None
             m["R"] = rot_matrix(m["pitch"], m["yaw"], m["roll"])
             self.face.stream.synchronize()
         el, er = lmk[[0, 12]].mean(0), lmk[[24, 36]].mean(0)
@@ -469,6 +474,14 @@ class LPPass:
         if "euro" in p:
             self.set_euro(p["euro"])
         return self.set_gain(**p.get("gains", {}))
+
+    def recalibrate(self):
+        """Neutral calibration: forget the driver's and the character's learned baselines (pitch reference, resting
+        expressions, last good / held expressions); the driver's crop reference is re-taken by Driver.reset()."""
+        self.base_out = self.neutral_in = self.exp_in = self.pose_s = self.drv0 = self.pitch0 = None
+        self._last_drv = self._last_s = self._last_good_drv = None
+        self._gated = self._drv_lost = self._src_lost = 0
+        self.clear_frames = 99
 
     def gates(self):
         return {"drv_yaw": list(self.drv_yaw_gate), "drv_pitch": list(self.drv_pitch_gate), "cover": list(self.cover_gate),

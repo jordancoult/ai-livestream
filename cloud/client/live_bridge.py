@@ -1059,6 +1059,10 @@ async def main():
                     restart = f"session options {cmd['session']}"
                 if cmd.get("reset"):
                     restart = restart or "resetting memory"
+                    if ff is not None:     # + face-pass neutral calibration: re-take the driver's face reference
+                        ff.drv.reset()    # (from the next frontal frame) and forget the learned baselines
+                        ff.lp.recalibrate()
+                        say("face pass recalibrated: look at the camera with a neutral face")
                 if restart:
                     await restart_session(restart)
 

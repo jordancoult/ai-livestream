@@ -86,6 +86,7 @@ class AudioMonitor:
         self.levels = {k: collections.deque(maxlen=30) for k in ("in", "voice", "out")}
         self.flow = {"fed": 0, "got": 0, "buf": 0, "in_stage": 0, "stall_ms": 0}
         self._stall_logged = 0.0
+        self._restarting = None
         self._adjusting = False
         self._smooth = None
         self._since_force = 999
@@ -103,6 +104,28 @@ class AudioMonitor:
                                      stdin=subprocess.PIPE)
         threading.Thread(target=self._run_logged, daemon=True).start()
         return self
+
+    def _restart_voice(self):
+        from voice_stage import VoiceStage
+        old = self.voice
+        n = 0
+        while not self.stop.is_set():
+            n += 1
+            print(f"[av_sync] restarting the voice stage (try {n}; audio muted meanwhile)", flush=True)
+            try:
+                old.close()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                new = VoiceStage(old.cmd, log=old.log, gpu_share=old.gpu_share)
+                self.voice = new
+                self.stats["voice_restarts"] = self.stats.get("voice_restarts", 0) + 1
+                print("[av_sync] voice stage back", flush=True)
+                break
+            except Exception as e:  # noqa: BLE001
+                print(f"[av_sync] voice stage restart failed: {e}", flush=True)
+                self.stop.wait(10)
+        self._restarting = None
 
     def _run_logged(self):
         try:
@@ -125,9 +148,20 @@ class AudioMonitor:
                 return
             if self.record_in is not None:
                 self.record_in.append((time.time(), b))
-            if voice_on and self.voice.failed:   # stage died: continue with the plain mic
-                voice_on = False
-                buf.clear()
+            if voice_on and self.voice.failed:   # stage died (e.g. the SSH link to the GPU box dropped): restart it;
+                buf.clear()                      # meanwhile MUTE (the plain mic would leak the performer's real voice)
+                if self._restarting is None:
+                    self._restarting = threading.Thread(target=self._restart_voice, daemon=True)
+                    self._restarting.start()
+                self.levels["in"].append(_rms(b))
+                self.levels["out"].append(0.0)
+                self.flow["restarting"] = True
+                try:
+                    self.play.stdin.write(silence)
+                except (BrokenPipeError, ValueError):
+                    return
+                continue
+            self.flow["restarting"] = False
             self.levels["in"].append(_rms(b))
             self.flow["fed"] += 1
             if voice_on:

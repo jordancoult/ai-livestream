@@ -14,6 +14,7 @@ import os
 import shlex
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -45,7 +46,8 @@ def build_cmd(kind, model=None, pitch=5, index_rate=0.5, block_ms=100, gain=-6.0
 
 class VoiceStage:
     def __init__(self, cmd, log=print, ready_timeout=180, gpu_share=None):
-        self.log, self.cmd = log, cmd
+        self.log, self.cmd, self.gpu_share = log, cmd, gpu_share
+        self._tail = collections.deque(maxlen=20)
         self.out = collections.deque()      # converted 10 ms blocks
         self.sent = self.moved = 0          # 10 ms blocks fed / handed to the delay line
         self.delay_ms, self.block = None, None
@@ -64,7 +66,7 @@ class VoiceStage:
         self.log(f"voice stage ready: algorithmic delay {self.delay_ms} ms, block {self.block / 48:.0f} ms")
 
     def _stderr(self):
-        tail = collections.deque(maxlen=20)
+        tail = self._tail
         for line in self.p.stderr:
             s = line.decode(errors="replace").rstrip()
             if s.startswith("READY"):
@@ -83,7 +85,9 @@ class VoiceStage:
             b = self.p.stdout.read(BLOCK_BYTES)
             if len(b) < BLOCK_BYTES:
                 self.failed = True
-                self.log("voice stage stopped: audio continues unconverted")
+                time.sleep(0.5)    # let stderr finish
+                why = " | ".join(list(self._tail)[-4:]) or f"exit code {self.p.poll()}"
+                self.log(f"voice stage stopped ({why[:300]})")
                 return
             self.out.append(b)
 

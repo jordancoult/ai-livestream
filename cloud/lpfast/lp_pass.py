@@ -386,6 +386,9 @@ class LPPass:
         # detection outages: frames a lost driver face keeps its last expression / a lost generated face its last
         # analysis (12 = ~0.5 s; the generated face moves, so its hold is short)
         self.drv_hold, self.src_hold = drv_hold, src_hold
+        # gate_hold: while a DRIVER gate is closed (turned / covered / weak detection), keep the last expression that
+        # passed the gates for up to this many frames instead of fading to the raw frame (0 = off: fade at once)
+        self.gate_hold, self._gated, self._last_good_drv = 0, 0, None
         self._last_drv = self._last_s = None
         self._drv_lost = self._src_lost = 0
         self._last_crop = None
@@ -470,7 +473,7 @@ class LPPass:
     def gates(self):
         return {"drv_yaw": list(self.drv_yaw_gate), "drv_pitch": list(self.drv_pitch_gate), "cover": list(self.cover_gate),
                 "score": list(self.score_gate), "visibility": self.use_vis, "cover_hold": self.cover_hold,
-                "src_yaw": list(self.yaw_gate), "src_pitch": list(self.pitch_gate)}
+                "src_yaw": list(self.yaw_gate), "src_pitch": list(self.pitch_gate), "gate_hold": self.gate_hold}
 
     def set_gate(self, **g):
         """drv_yaw / drv_pitch / src_yaw / src_pitch = (start fading, fully off) in degrees; cover = (full, off) of the
@@ -489,13 +492,17 @@ class LPPass:
                                "src_pitch": "pitch_gate", "cover": "cover_gate", "score": "score_gate"}[k], (lo, hi))
             elif k in ("visibility", "hands"):
                 self.use_vis = bool(v)
+            elif k == "gate_hold":
+                if int(v) < 0:
+                    raise ValueError(f"gate_hold: need >= 0 frames, got {v}")
+                self.gate_hold = int(v)
             elif k == "cover_hold":
                 if int(v) < 0:
                     raise ValueError(f"hold: need >= 0 frames, got {v}")
                 self.cover_hold = int(v)
             else:
                 raise ValueError(f"unknown gate {k!r}; use drv_yaw, drv_pitch, cover, score, src_yaw, src_pitch, "
-                                 "visibility, cover_hold")
+                                 "visibility, cover_hold, gate_hold")
         return self.gates()
 
     def set_gain(self, **g):
@@ -627,7 +634,8 @@ class LPPass:
             self.base_out = self.neutral_in = self.exp_in = self.pose_s = self.drv0 = self.pitch0 = None
             self.clear_frames, self.gate_info = 99, {}
             self.w, self.timing = 0.0, {}
-            self._last_drv = self._last_s = None
+            self._last_drv = self._last_s = self._last_good_drv = None
+            self._gated = 0
             self._drv_lost = self._src_lost = 0
 
     def driver(self):
@@ -685,7 +693,15 @@ class LPPass:
                 tuple(0.6 * p + 0.4 * v for p, v in zip(self.pose_s, (yaw, pitch)))  # no flicker at the threshold
             yaw, pitch = self.pose_s
             ramp = lambda v, g: min(1.0, max(0.0, (g[1] - v) / (g[1] - g[0])))  # noqa: E731
-            target = min(ramp(yaw, self.yaw_gate), ramp(pitch, self.pitch_gate), self._driver_gate(drv))
+            g_drv = self._driver_gate(drv)
+            if g_drv >= 0.99:
+                self._last_good_drv, self._gated = drv, 0
+            elif self.gate_hold and self._last_good_drv is not None and self._gated < self.gate_hold:
+                # a driver gate closed: hold the last good expression (no fade to the raw frame for a head turn or
+                # a hand passing by); fades as usual only if it stays closed past gate_hold frames
+                drv, self._gated, g_drv = self._last_good_drv, self._gated + 1, 1.0
+                held.append("gate")
+            target = min(ramp(yaw, self.yaw_gate), ramp(pitch, self.pitch_gate), g_drv)
         fade_out = 2 * self.fade if self.gate_info.get("g_cover", 1.0) < 1 else self.fade  # covers: drop fast
         self.w = min(target, self.w + self.fade) if target > self.w else max(target, self.w - fade_out)
         ok = ok and self.w > 0

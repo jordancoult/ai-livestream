@@ -313,14 +313,15 @@ async function start(){ $("go").hidden=true; $("st").textContent="starting camer
     let sup=await VideoEncoder.isConfigSupported(cfg).catch(()=>({supported:false}));
     if(!sup.supported){cfg.codec="avc1.640028"; sup=await VideoEncoder.isConfigSupported(cfg).catch(()=>({supported:false}));}
     if(sup.supported){
-      const caps=new Map();
-      enc=new VideoEncoder({output:(chunk)=>{const c=caps.get(chunk.timestamp)||{}; caps.delete(chunk.timestamp); encMs.push(now()-c.t0); if(encMs.length>60)encMs.shift();
+      const caps=[];   // FIFO: a realtime H.264 encode (no B-frames) returns frames in order; timestamps of canvas
+                       // frames don't survive exactly, so they can't be the key
+      enc=new VideoEncoder({output:(chunk)=>{const c=caps.shift()||{}; encMs.push(now()-c.t0); if(encMs.length>60)encMs.shift();
           const b=new ArrayBuffer(chunk.byteLength); chunk.copyTo(b); send(72,c.cap,c.sq,chunk.type==="key",b); nEnc++;},
         error:e=>{$("st").textContent="encoder error: "+e.message;}});
       enc.configure(cfg);
       const step=(t,meta)=>{ if(enc.encodeQueueSize<2){ const cap=meta&&meta.captureTime?performance.timeOrigin+meta.captureTime:now();
           const ts=Math.round(meta.mediaTime*1e6)||Math.round(t*1000); cg.drawImage(v,0,0,W,H); const f=new VideoFrame(cvs,{timestamp:ts}); const sq=++seq;
-          caps.set(ts,{cap,sq,t0:now()}); enc.encode(f,{keyFrame:sq%60===1}); f.close(); }
+          caps.push({cap,sq,t0:now()}); enc.encode(f,{keyFrame:sq%60===1}); f.close(); }
         v.requestVideoFrameCallback(step); };
       v.requestVideoFrameCallback(step);
     } else kind="";

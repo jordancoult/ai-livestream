@@ -806,7 +806,7 @@ async def main():
             mic_lag["t"] = now
             try:
                 j = json.loads(Path(args.mic_lag_file).read_text())
-                mic_lag["ms"] = float(j["ms"]) if now - float(j["t"]) / 1000 < 10 else None
+                mic_lag["ms"] = float(j["ms"]) if now - float(j["t"]) / 1000 < 120 else None   # written every few s
             except (OSError, ValueError, KeyError):
                 mic_lag["ms"] = None
         return None if mic_lag["ms"] is None else -min(400.0, max(0.0, mic_lag["ms"]))

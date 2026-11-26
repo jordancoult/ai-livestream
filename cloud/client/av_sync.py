@@ -142,10 +142,26 @@ class AudioMonitor:
         buf = collections.deque()
         silence = bytes(BLOCK * 2)
         voice_on = self.voice is not None
+        t0, n_read = None, 0
         while not self.stop.is_set():
             b = self.cap.stdout.read(BLOCK * 2)
             if len(b) < BLOCK * 2:
                 return
+            # capture backlog guard: reads must keep pace with the wall clock. If this loop was held up (it used to
+            # block on a hung voice stage), the capture behind it piled up and played out seconds late, invisible to
+            # the delay accounting. Behind by > 200 ms -> drop the backlog (catch up at once).
+            now = time.time()
+            if t0 is None:
+                t0 = now
+            n_read += 1
+            behind = (now - t0) - n_read * BLOCK / SR
+            if behind < -0.2:                  # reading ahead of the clock (start-up / clock drift): re-anchor
+                t0, n_read = now, 0
+            elif behind > 0.2:
+                self.stats["capture_dropped"] = self.stats.get("capture_dropped", 0) + 1
+                if behind > 0.5:
+                    t0, n_read = now, 0        # far behind: re-anchor after this burst (drop it all)
+                continue
             if self.record_in is not None:
                 self.record_in.append((time.time(), b))
             if voice_on and self.voice.failed:   # stage died (e.g. the SSH link to the GPU box dropped): restart it;
@@ -178,6 +194,12 @@ class AudioMonitor:
                 normal = self.voice.block_blocks * 2 + self.voice.delay_ms / 10
                 stall = max(0.0, in_stage - normal)
                 self.flow["stall_ms"] = round(stall * 10)
+                # stuck: no output for 2.5 s although it streams continuously (hung SSH / GPU) -> restart now instead
+                # of waiting ~20 s for SSH to give up (feed() drops while it is stuck, so the backlog can't show it)
+                quiet_s = self.voice.quiet_s()
+                if quiet_s > 2.5 and not self.voice.failed:
+                    print(f"[av_sync] voice stage gave no output for {quiet_s:.1f} s: restarting it", flush=True)
+                    self.voice.failed = True
                 if stall > 30 and time.time() - self._stall_logged > 5:
                     self._stall_logged = time.time()
                     print(f"[av_sync] voice stage behind by {stall * 10:.0f} ms (stall: network / GPU)", flush=True)

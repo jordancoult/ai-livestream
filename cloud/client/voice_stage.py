@@ -37,8 +37,12 @@ def build_cmd(kind, model=None, pitch=5, index_rate=0.5, block_ms=100, gain=-6.0
         model = f"models/rvc/{Path(model).parent.name}/{Path(model).name}" if model else "models/rvc/karen/karen.pth"
         remote = PRESETS[kind].format(repo=".", model=model, pitch=pitch, index_rate=index_rate, block_ms=block_ms,
                                       gain=gain, protect=protect, rms_mix=rms_mix)
+        # first kill any earlier copy of ours: closing the SSH pipe does not stop the remote process, and orphans
+        # filled the box's GPU so every restart failed (2026-11-26). The pattern is anchored to the python process's
+        # own command line (^./tools/...), so it can't match this shell's command line, which contains the same text.
+        kill_old = "pkill -f '^./tools/rvc_live/.venv/bin/python ./tools/rvc_live/serve.py' ; sleep 1 ; "
         return ["env", f"POD_FILE={REPO}/cloud/infra/.pod.{host}", "bash", str(REPO / "cloud" / "infra" / "pod.sh"),
-                f"cd /workspace/rvc && {remote}"]
+                f"cd /workspace/rvc && {kill_old}exec {remote}"]
     model = model or str(REPO / "models" / "rvc" / "karen" / "karen.pth")
     return shlex.split(PRESETS[kind].format(repo=REPO, model=model, pitch=pitch, index_rate=index_rate,
                                             block_ms=block_ms, gain=gain, protect=protect, rms_mix=rms_mix))
@@ -72,6 +76,7 @@ class VoiceStage:
             if s.startswith("READY"):
                 kv = dict(x.split("=") for x in s.split()[1:])
                 self.delay_ms, self.block = float(kv["delay_ms"]), int(kv["block"])
+                self.last_out = time.time()   # the output-silence watchdog counts from READY
                 self._ready.set()
             else:
                 tail.append(s)
@@ -90,13 +95,25 @@ class VoiceStage:
                 self.log(f"voice stage stopped ({why[:300]})")
                 return
             self.out.append(b)
+            self.last_out = time.time()      # the stage streams continuously (silence too): a gap = stuck
 
     # monitor side (one thread)
     def feed(self, block):
+        """Never blocks: a stage that stopped reading (hung SSH link to the GPU box) used to fill the pipe in ~0.7 s
+        and then block here, freezing the whole audio loop while the mic capture behind it piled up (2026-11-26:
+        chopped audio, then dozens of seconds late). Blocks that don't fit are dropped and counted."""
         try:
-            self.p.stdin.write(block)
-            self.p.stdin.flush()
+            if not getattr(self, "_nb", False):
+                os.set_blocking(self.p.stdin.fileno(), False)
+                self._nb = True
+            now = time.time()
+            if now - getattr(self, "last_feed", 0) > 1.0:   # input (re)started after a pause: the output-silence
+                self.feed_since = now                        # watchdog counts from here, not from READY
+            self.last_feed = now
+            os.write(self.p.stdin.fileno(), block)   # 960 B < PIPE_BUF: all or nothing (EAGAIN)
             self.sent += 1
+        except BlockingIOError:
+            self.dropped_in = getattr(self, "dropped_in", 0) + 1
         except (BrokenPipeError, ValueError, OSError):
             self.failed = True
 
@@ -112,6 +129,13 @@ class VoiceStage:
     def block_blocks(self):
         """The stage's block size in 10 ms blocks (it returns audio in bursts of this size)."""
         return (self.block or 4800) / 480
+
+    def quiet_s(self):
+        """Seconds without output WHILE being fed (0 when idle): > ~2.5 means stuck (it streams continuously)."""
+        now = time.time()
+        if now - getattr(self, "last_feed", 0) > 1.0:
+            return 0.0
+        return now - max(getattr(self, "last_out", 0) or 0, getattr(self, "feed_since", now))
 
     def pending_blocks(self):
         """Delay inside the stage in 10 ms blocks: fed but not yet handed over (in the stage or ready) + its

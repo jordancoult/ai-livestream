@@ -1191,7 +1191,7 @@ async def main():
                     if now - last_in > STALL_S and sending_for > STALL_S and now - last_restart > 8:
                         last_restart = now
                         stats["stall_restarts"] += 1
-                        await restart_session(f"JoyAI stalled ({now - last_in:.0f} s without output while sending): "
+                        await restart_session(f"JoyAI stalled ({sending_for:.0f} s without output while sending): "
                                               f"restarting the session")
 
             async def ff_watch():

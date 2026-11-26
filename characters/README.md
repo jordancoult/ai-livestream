@@ -17,6 +17,8 @@ voice, `voice.pitch_self` semitones up, delayed to stay in sync with the output 
     tools/character_live.py karen --driver phone             # iPhone camera via AirPlay mirroring (starts
                                                              # tools/iphone_airplay.sh; mirror to "JoyAI-Cam") + mic
     tools/character_live.py karen --driver srt               # phone app streaming SRT to port 9000 (Larix) + mic
+    tools/character_live.py karen --driver phonecam         # all from a phone browser: its camera + mic drive, the page shows
+                                                             # the character and plays its voice (no app, no AirPlay)
     tools/character_live.py karen --driver webcam --test     # self-drive test clip (assets/self_drive_test.mp4)
     options: --mic SOURCE (e.g. a headset mic; pactl list short sources), --pitch N, --bridge-args '--input-rotate cw'
 

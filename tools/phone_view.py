@@ -34,6 +34,7 @@ from websockets.http11 import Response
 REPO = Path(__file__).resolve().parents[1]
 SR, CHUNK = 48000, 960  # 20 ms audio chunks
 CAM_W, CAM_H = 480, 640  # camera frames handed on (nuance_source CAM_W/CAM_H)
+DRV_W, DRV_H = 720, 960  # --drive-srt: the phone camera as the pipeline's source video (3:4 portrait)
 
 
 def lan_ip():
@@ -66,6 +67,7 @@ class Hub:
     def __init__(self, a):
         self.a, self.clients, self.loop = a, set(), None
         self.cam_out = set()   # local camera readers (asyncio StreamWriters)
+        self.enc = None        # --drive-srt encoder (ffmpeg -> SRT -> the bridge)
         self.n_cam = 0
         self.mic = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1",
                                      "--latency-msec=20", "-d", a.mic_sink], stdin=subprocess.PIPE)
@@ -138,16 +140,44 @@ class Hub:
                 if m[:1] == b"M" and self.mic.poll() is None:
                     self.mic.stdin.write(m[1:])
                     self.mic.stdin.flush()
-                elif m[:1] == b"C" and self.cam_out:
+                elif m[:1] == b"C" and (self.cam_out or self.a.drive_srt):
                     self.camera_frame(m[1:])
         finally:
             self.clients.discard(ws)
             print(f"[phone] disconnected ({len(self.clients)})", flush=True)
 
+    def drive(self, img):
+        """The phone camera as the source video: raw frames -> x264 -> SRT (the bridge listens)."""
+        if self.enc is None or self.enc.poll() is not None:
+            self.enc = subprocess.Popen(
+                ["ffmpeg", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{DRV_W}x{DRV_H}",
+                 "-use_wallclock_as_timestamps", "1", "-i", "-", "-c:v", "libx264", "-preset", "veryfast",
+                 "-tune", "zerolatency", "-g", "30", "-b:v", "4M", "-pix_fmt", "yuv420p", "-fps_mode", "passthrough",
+                 "-f", "mpegts", self.a.drive_srt], stdin=subprocess.PIPE)
+            print(f"[phone] camera -> {self.a.drive_srt} (the source video)", flush=True)
+        try:
+            self.enc.stdin.write(img.tobytes())
+        except (BrokenPipeError, OSError):
+            self.enc = None
+
     def camera_frame(self, jpg):
         img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             return
+        if self.a.drive_srt:
+            h, w = img.shape[:2]
+            if w * DRV_H > h * DRV_W:
+                nw = h * DRV_W // DRV_H
+                c = img[:, (w - nw) // 2:(w - nw) // 2 + nw]
+            else:
+                nh = w * DRV_H // DRV_W
+                c = img[(h - nh) // 2:(h - nh) // 2 + nh]
+            self.drive(cv2.resize(c, (DRV_W, DRV_H), interpolation=cv2.INTER_AREA))
+            self.n_cam += 1
+            if self.n_cam == 1:
+                print("[phone] camera: first frame -> the pipeline", flush=True)
+            if not self.cam_out:
+                return
         h, w = img.shape[:2]
         if w * CAM_H > h * CAM_W:            # crop to 3:4 portrait, then scale
             nw = h * CAM_W // CAM_H
@@ -180,7 +210,8 @@ class Hub:
             return None  # WebSocket upgrade
         if req.path.split("?")[0] == "/" and f"t={self.a.token}" in req.path:
             body = (PAGE.replace("__TOKEN__", self.a.token).replace("__TITLE__", self.a.title)
-                    .replace("__CAMERA__", "true" if self.a.camera_port else "false")).encode()
+                    .replace("__CAMERA__", "true" if self.a.camera_port or self.a.drive_srt else "false")
+                    .replace("__DRIVE__", "true" if self.a.drive_srt else "false")).encode()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "text/html; charset=utf-8"),
                                                                ("Cache-Control", "no-store"),
                                                                ("Content-Length", str(len(body)))]), body)
@@ -197,6 +228,8 @@ async def main():
     ap.add_argument("--fps", type=int, default=25)
     ap.add_argument("--token", default=None)
     ap.add_argument("--title", default="Character")
+    ap.add_argument("--drive-srt", default=None, help="the phone camera becomes the source video: H.264 over SRT to "
+                    "this URL (caller), e.g. srt://127.0.0.1:9024 (the bridge's --input srt://0.0.0.0:9024)")
     ap.add_argument("--camera-port", type=int, default=0, help="hand the phone camera on to tcp://127.0.0.1:PORT "
                     "(0 = the page doesn't ask for the camera)")
     a = ap.parse_args()
@@ -238,7 +271,7 @@ cancels echo, but speakers can still leak into the mic).</p></div>
 <label id="sync" title="Voice comes late (e.g. Bluetooth earbuds): slide right. Voice early: slide left.">sync
 <input id="off" type="range" min="-400" max="400" step="20" value="0"><span id="offv">0</span></label><span id="st"></span></div>
 <script>
-const T="__TOKEN__", CAM=__CAMERA__, $=id=>document.getElementById(id);
+const T="__TOKEN__", CAM=__CAMERA__, DRIVE=__DRIVE__, $=id=>document.getElementById(id);
 let ctx, ws, micOn=true, playAt=0, frames=[], lastURL=null, rx=0, lag=0.15, userOff=0;
 try{userOff=+localStorage.getItem("avoff")||0;}catch(e){}
 // the picture is shown when its audio is heard: audio buffered + the device's audio output latency (+ user's offset,
@@ -270,16 +303,17 @@ $("start").onclick=async()=>{
   ctx=new (window.AudioContext||window.webkitAudioContext)(); await ctx.resume();
   let stream;
   const ac={echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1};
-  try{stream=await navigator.mediaDevices.getUserMedia(CAM?{audio:ac,video:{facingMode:"user",width:{ideal:640},height:{ideal:480}}}:{audio:ac});}
+  try{stream=await navigator.mediaDevices.getUserMedia(CAM?{audio:ac,video:DRIVE?{facingMode:"user",width:{ideal:1280},height:{ideal:960},frameRate:{ideal:30}}:{facingMode:"user",width:{ideal:640},height:{ideal:480}}}:{audio:ac});}
   catch(e){alert("Microphone/camera blocked: "+e.message); $("start").disabled=false; $("start").textContent="Start talking to __TITLE__"; return;}
-  if(CAM&&stream.getVideoTracks().length){ // the persona sees you: JPEG frames at ~15 fps
+  if(CAM&&stream.getVideoTracks().length){ // JPEG frames: ~15 fps for the persona to see you, 30 fps when your
+                                          // camera IS the source video (DRIVE)
     const me=$("me"); me.srcObject=stream; me.hidden=false; await me.play().catch(()=>{});
     const cv=document.createElement("canvas"), g=cv.getContext("2d"); let busy=false;
     setInterval(()=>{ if(busy||!ws||ws.readyState!==1||!me.videoWidth||ws.bufferedAmount>300000)return;
-      const s=Math.min(1,640/Math.max(me.videoWidth,me.videoHeight)); cv.width=me.videoWidth*s|0; cv.height=me.videoHeight*s|0;
+      const s=Math.min(1,(DRIVE?960:640)/Math.max(me.videoWidth,me.videoHeight)); cv.width=me.videoWidth*s|0; cv.height=me.videoHeight*s|0;
       g.drawImage(me,0,0,cv.width,cv.height); busy=true;
-      cv.toBlob(async b=>{busy=false; if(!b||!ws||ws.readyState!==1)return; const d=new Uint8Array(await b.arrayBuffer()), o=new Uint8Array(d.length+1); o[0]=67; o.set(d,1); ws.send(o);},"image/jpeg",0.7);
-    },66);
+      cv.toBlob(async b=>{busy=false; if(!b||!ws||ws.readyState!==1)return; const d=new Uint8Array(await b.arrayBuffer()), o=new Uint8Array(d.length+1); o[0]=67; o.set(d,1); ws.send(o);},"image/jpeg",DRIVE?0.82:0.7);
+    },DRIVE?33:66);
   }
   const src=ctx.createMediaStreamSource(stream), proc=ctx.createScriptProcessor(1024,1,1), r=48000/ctx.sampleRate;
   proc.onaudioprocess=e=>{ if(!ws||ws.readyState!==1)return;

@@ -21,6 +21,8 @@ bridge's options used here all default to off).
                                                 9000; cloud/docs/iphone-camera.md) + laptop mic
   tools/character_live.py karen --phone          talk to it FROM YOUR PHONE (same Wi-Fi): a page shows the character
                                                 and plays its voice; the phone's mic is your voice (tools/phone_view.py)
+  tools/character_live.py karen --driver phonecam   YOU drive from a phone browser (same Wi-Fi): its front camera
+                                                and mic are the source, the same page shows the character + its voice
   tools/character_live.py karen --driver webcam --test   the self-drive test clip (a face + a male voice) instead
                                                 of your camera/mic (same path as live from the bridge on)
   options: --mic SOURCE (your voice: any PulseAudio source, e.g. a headset mic), --camera /dev/videoN,
@@ -68,7 +70,7 @@ def load_character(name):
     return c
 
 
-SELF = ("webcam", "phone", "srt")
+SELF = ("webcam", "phone", "srt", "phonecam")
 
 
 def sink(name):
@@ -105,6 +107,8 @@ def main():
     c = load_character(a.character)
     v, conv = c["voice"], c["conversation"]
     self_drive = a.driver in SELF
+    if a.driver == "phonecam":
+        a.phone = True
     pitch = a.pitch if a.pitch is not None else (v.get("pitch_self", v["pitch"]) if self_drive else v["pitch"])
     if self_drive and not a.test and a.max_seconds == 300:
         a.max_seconds = 0  # you drive: run until Ctrl+C
@@ -125,7 +129,8 @@ def main():
         env["PULSE_SINK"] = "char_out"
     run_s = a.seconds if a.test else a.max_seconds
     if live_self:
-        inp = a.camera if a.driver == "webcam" else f"srt://0.0.0.0:{a.srt_port}"
+        inp = (a.camera if a.driver == "webcam" else f"srt://0.0.0.0:{PORT}" if a.driver == "phonecam"
+               else f"srt://0.0.0.0:{a.srt_port}")
         mon = a.mic
     else:
         inp, mon = f"srt://0.0.0.0:{PORT}", "char_audio.monitor"
@@ -141,7 +146,7 @@ def main():
               "--seconds", str(int(run_s + 40)) if a.test else "0"]
     if a.voice_host and not a.no_voice:
         bridge += ["--voice-host", a.voice_host]
-    av_off = (0 if live_self else SYNC_SRT_DRIVER_MS) + (SYNC_REMOTE_VOICE_MS if a.voice_host and not a.no_voice else 0)
+    av_off = (0 if live_self and a.driver != "phonecam" else SYNC_SRT_DRIVER_MS) + (SYNC_REMOTE_VOICE_MS if a.voice_host and not a.no_voice else 0)
     bridge += ["--monitor-offset-ms", str(av_off)]
     if not a.no_face_pass:
         bridge += ["--facefix-preset", c["face_pass"]["lpfast_preset"]]
@@ -173,7 +178,9 @@ def main():
         if a.phone:
             pv = subprocess.Popen([PY, str(REPO / "tools/phone_view.py"), "--out-sink", "phone_out", "--mic-sink",
                                    "phone_mic", "--port", str(a.phone_port), "--dashboard", str(a.dashboard),
-                                   "--title", c["name"]] + (["--camera-port", str(CAM_PORT)] if a.driver == "nuance" else []), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                                   "--title", c["name"]] + (["--camera-port", str(CAM_PORT)] if a.driver == "nuance" else [])
+                                  + (["--drive-srt", f"srt://127.0.0.1:{PORT}?mode=caller&latency=20"]
+                                     if a.driver == "phonecam" and not a.test else []), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             procs.insert(0, pv)
             for line in pv.stdout:
                 print(line.rstrip(), flush=True)

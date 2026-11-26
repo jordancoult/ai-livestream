@@ -58,6 +58,8 @@ p.add_argument("--monitor-source", default="default", help="--audio-monitor audi
                "sources; default = laptop mic) or 'airplay' = the phone's own sound via tools/iphone_airplay.sh PHONE_AUDIO=1")
 p.add_argument("--monitor-offset-ms", type=float, default=0, help="--audio-monitor: manual adjustment added to the "
                "automatic delay (+ = audio later); normally 0: run the A/V sync test instead")
+p.add_argument("--mic-lag-file", default=None, help="--audio-monitor: JSON {ms, t} with the audio source's measured lag "
+               "behind its capture (tools/phone_view.py writes it for the phone mic); subtracted from the delay live")
 p.add_argument("--voice", default="off", choices=["off", "rvc"], help="--audio-monitor: change the voice before "
                "playing it (rvc = an RVC v2 model on the local GPU, tools/rvc_live). Runs inside the A/V delay, so it "
                "adds no latency and stays in sync")
@@ -794,9 +796,24 @@ async def main():
     from av_sync import AVSync
     if args.monitor_source == "airplay":
         args.monitor_source = "airplay_audio.monitor"
+    mic_lag = {"t": 0.0, "ms": None}
+
+    def live_adjust():   # minus the measured mic lag (re-read at most once a second; stale after 10 s = none)
+        if not args.mic_lag_file:
+            return None
+        now = time.time()
+        if now - mic_lag["t"] > 1.0:
+            mic_lag["t"] = now
+            try:
+                j = json.loads(Path(args.mic_lag_file).read_text())
+                mic_lag["ms"] = float(j["ms"]) if now - float(j["t"]) / 1000 < 10 else None
+            except (OSError, ValueError, KeyError):
+                mic_lag["ms"] = None
+        return None if mic_lag["ms"] is None else -min(400.0, max(0.0, mic_lag["ms"]))
+
     sync = AVSync("net" if src.net else "webcam" if src.live else "file", args.input,
                   monitor_source=args.monitor_source if args.audio_monitor else None, adjust_ms=args.monitor_offset_ms,
-                  log=blog, voice=voice)
+                  log=blog, voice=voice, live_adjust=live_adjust)
     src.on_frame = sync.on_input
     if args.record_av:
         sync.record_av(args.record_av, width=960 if args.record_av_sbs else 480)
@@ -845,6 +862,7 @@ async def main():
                 return
             h, w = m["height"], m["width"]
             print(f"[bridge] session started {w}x{h}; {args.input} -> {args.output}", flush=True)
+            sync.reset_latency()          # a new session's latency: the voice delay follows it at once
             def new_enc():
                 e = av.CodecContext.create("libx264", "w")
                 e.width, e.height, e.pix_fmt = sess["w"], sess["h"], "yuv420p"
@@ -933,6 +951,7 @@ async def main():
                                     sess["review"] = None
                             sess["state"] = "running"
                             print(f"[bridge] session restarted ({nw}x{nh})", flush=True)
+                            sync.reset_latency()
                         elif j.get("type") in ("error", "flow_drop", "session_reset", "no_person"):
                             stats[j["type"]] += 1
                         continue

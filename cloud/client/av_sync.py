@@ -315,11 +315,14 @@ def _brightness(frame):
 
 class AVSync:
     def __init__(self, input_kind, input_name, monitor_source=None, adjust_ms=0.0, log=print, window_frames=125,
-                 voice=None):
+                 voice=None, live_adjust=None):
         # the camera chain depends on the input AND the audio path (e.g. AirPlay audio already matches its picture, a
         # laptop mic does not): saved per (input, audio source), re-measured by every sync test
         self.kind = f"{input_kind}|{input_name}|{monitor_source or '-'}"
         self.name, self.adjust_ms, self.log = input_name, adjust_ms, log
+        # live_adjust() -> ms added to the delay, measured continuously (e.g. minus the phone mic's lag: its audio
+        # reaches us later than its capture, so it needs that much less delay), or None
+        self.live_adjust = live_adjust
         self.lat = collections.deque(maxlen=window_frames)   # ms, input arrival -> played (display)
         # the audio follows the median of the last ~15 s: a stall of a few seconds (network, server) delays a
         # minority of frames and leaves the audio alone, instead of a gap and a skip in the voice
@@ -354,6 +357,15 @@ class AVSync:
             h, w = frame.shape[:2]
             self._played.append((now, _brightness(frame), cv2.resize(frame, (240, round(240 * h / w / 2) * 2))))
 
+    def reset_latency(self):
+        """A new model session: its latency differs, so forget the old samples and follow the new ones at once (the
+        ~15 s median kept the audio off for many seconds after every restart / memory reset). The monitor's smoothing
+        snaps too (a change > 500 ms snaps anyway; smaller ones would otherwise take ~2 s)."""
+        self.lat.clear()
+        self.lat_long.clear()
+        if self.monitor is not None:
+            self.monitor._smooth = None
+
     # numbers
     def pipeline_ms(self):
         l = sorted(self.lat)
@@ -362,11 +374,14 @@ class AVSync:
     def delay_ms(self):
         l = sorted(self.lat_long)
         p = l[len(l) // 2] if l else None
-        return None if p is None else max(0.0, p + self.chain_ms - PLAY_LATENCY_MS + self.adjust_ms)
+        la = (self.live_adjust() or 0.0) if self.live_adjust else 0.0
+        return None if p is None else max(0.0, p + self.chain_ms - PLAY_LATENCY_MS + self.adjust_ms + la)
 
     def status(self):
         p, d = self.pipeline_ms(), self.delay_ms()
+        la = self.live_adjust() if self.live_adjust else None
         return {"pipeline_ms": None if p is None else round(p), "chain_ms": self.chain_ms,
+                "live_adjust_ms": None if la is None else round(la), "adjust_ms": self.adjust_ms,
                 "delay_ms": None if d is None else round(d),
                 "monitor": dict(self.monitor.stats) if self.monitor else None, "test": dict(self.test),
                 "levels": {k: round(20 * np.log10(max(1e-5, max(v) if v else 1e-5)), 1)

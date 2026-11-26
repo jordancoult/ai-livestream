@@ -56,7 +56,7 @@ SYNC_REMOTE_VOICE_MS = 35
 #  - phonecam (the phone page's own H.264, h264tcp input): the video latency is measured from the phone camera's
 #    capture, the mic audio only from its arrival (~30 ms later) -> without a correction it plays ~30 ms late
 #    (ESTIMATE, to be measured with a flash/beep run like the SRT driver's)
-SYNC_PHONE_H264_MS = -30
+SYNC_PHONE_H264_MS = 0   # phone camera: the mic's own lag is measured live (phone_view -> --mic-lag-file); was a -30 guess
 H264_PORT = 9026
 CAM_PORT = 9025   # --phone: the phone camera -> the Nuance persona (it sees you)
 
@@ -168,6 +168,10 @@ def main():
         bridge += ["--voice-host", a.voice_host]
     av_off = (SYNC_PHONE_H264_MS if live_self and a.driver == "phonecam" else 0 if live_self else SYNC_SRT_DRIVER_MS) + (SYNC_REMOTE_VOICE_MS if a.voice_host and not a.no_voice else 0)
     bridge += ["--monitor-offset-ms", str(av_off)]
+    if live_self and a.driver == "phonecam":
+        lagf = REPO / ".tmp" / "phone_mic_lag.json"
+        lagf.unlink(missing_ok=True)
+        bridge += ["--mic-lag-file", str(lagf)]
     if not a.no_face_pass:
         bridge += ["--facefix-preset", c["face_pass"]["lpfast_preset"]]
     # live: the ffplay window + the OBS virtual camera (v4l2loopback "AI_Scope_Cam", docs/obs.md) when present

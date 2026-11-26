@@ -36,6 +36,7 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 REPO = Path(__file__).resolve().parents[1]
+MIC_LAG_FILE = REPO / ".tmp" / "phone_mic_lag.json"
 import sys as _sys  # noqa: E402
 _sys.path.insert(0, str(REPO / "tools"))
 from phone_cam_js import CAM_CSS, CAM_JS  # noqa: E402
@@ -121,6 +122,8 @@ class Hub:
         self.clock = Clock()
         self.h264_out = set()       # --drive-h264-port readers (the bridge)
         self.link_ms = collections.deque(maxlen=150)   # phone capture -> here (ms)
+        # phone mic capture -> here (ms): the bridge subtracts it from the voice delay (lip sync follows the uplink)
+        self.mic_lag = collections.deque(maxlen=250)
         self.want_key = False
         self.down = collections.deque()     # HTTPS transport: what goes to the phone in the next response
         self.http_last = self.http_ping = 0.0
@@ -134,6 +137,15 @@ class Hub:
         if now - self.t_rate >= 2:
             dt = now - self.t_rate
             self.rates = {k: round(v / dt, 1) for k, v in self.cnt.items()}
+            if len(self.mic_lag) >= 20:
+                ml = sorted(self.mic_lag)[len(self.mic_lag) // 2]
+                self.mic_lag_ms = round(ml)
+                try:   # read by the bridge (live_bridge.py --mic-lag-file)
+                    tmp = MIC_LAG_FILE.with_suffix(".tmp")       # atomic: the bridge never reads half a file
+                    tmp.write_text(json.dumps({"ms": round(ml, 1), "t": time.time() * 1000}))
+                    tmp.replace(MIC_LAG_FILE)
+                except OSError:
+                    pass
             self.cnt = {k: 0 for k in self.cnt}
             self.t_rate = now
 
@@ -145,7 +157,7 @@ class Hub:
                  "gap_max_ms": round(g[-1] * 1000)} if len(g) > 20 else None
         lk = sorted(self.link_ms)
         link = {"p50": round(lk[len(lk) // 2]), "p90": round(lk[int(len(lk) * 0.9)]), "max": round(lk[-1])} if len(lk) > 20 else None
-        return {"clients": len(self.clients) + (1 if self.http_active() else 0), "rates": self.rates, "cam_arrival": burst, "link_ms": link,
+        return {"clients": len(self.clients) + (1 if self.http_active() else 0), "rates": self.rates, "cam_arrival": burst, "link_ms": link, "mic_lag_ms": getattr(self, "mic_lag_ms", None),
                 "mic_db": round(20 * np.log10(max(1e-5, m)), 1), "phone": self.phone, "drive": bool(self.a.drive_srt)}
 
     def broadcast(self, data, video=False):
@@ -240,6 +252,12 @@ class Hub:
 
     def on_msg(self, m):
         if True:
+                if m[:1] == b"m" and len(m) > 9:     # timestamped mic: [m][capture ms f64, phone clock][pcm]
+                    cap = struct.unpack_from("<d", m, 1)[0]
+                    off = self.clock.offset()
+                    if off is not None:
+                        self.mic_lag.append(time.time() * 1000 - (cap - off))
+                    m = b"M" + m[9:]
                 if m[:1] == b"M" and self.mic.poll() is None:
                     self.cnt["mic_in"] += 1
                     x = np.frombuffer(m[1:], np.int16).astype(np.float32) / 32768
@@ -543,8 +561,9 @@ let outq=[], outBytes=0, inflight=false, lastPost=0, flushes=0;
 const BUDGET=250;
 function out(m){ m.t=Date.now(); outq.push(m); outBytes+=m.byteLength; post(); return true; }
 function trim(force){ const now=Date.now();
-  if(!force&&!outq.some(m=>(m[0]===72||m[0]===77)&&now-m.t>BUDGET)) return;
-  const before=outq.length; outq=outq.filter(m=>!(m[0]===72||m[0]===77)||(!force&&now-m.t<=BUDGET&&m[0]===77));
+  const mic=m=>m[0]===77||m[0]===109;
+  if(!force&&!outq.some(m=>(m[0]===72||mic(m))&&now-m.t>BUDGET)) return;
+  const before=outq.length; outq=outq.filter(m=>!(m[0]===72||mic(m))||(!force&&now-m.t<=BUDGET&&mic(m)));
   if(outq.length!==before){ flushes++; if(cam) cam.key(); }
   outBytes=outq.reduce((a,m)=>a+m.byteLength,0); }
 async function post(){ if(inflight) return; inflight=true; lastPost=Date.now(); trim(false);
@@ -603,7 +622,9 @@ async function start(){ if(started) return; started=true;
     const src=ctx.createMediaStreamSource(ms), proc=ctx.createScriptProcessor(1024,1,1), r=48000/ctx.sampleRate;
     proc.onaudioprocess=e=>{ const x=e.inputBuffer.getChannelData(0), n=Math.floor(x.length*r), o=new Int16Array(n);
       for(let i=0;i<n;i++){const v=micOn?x[Math.min(x.length-1,Math.floor(i/r))]:0; o[i]=Math.max(-1,Math.min(1,v))*32767;}
-      const m=new Uint8Array(1+o.byteLength); m[0]=77; m.set(new Uint8Array(o.buffer),1); out(m);};
+      // capture time of the chunk's first sample (phone clock, same as the video's): the laptop measures the mic's lag
+      const cap=nowMs()-x.length/ctx.sampleRate*1000-(ctx.baseLatency||0)*1000;
+      const m=new Uint8Array(9+o.byteLength); m[0]=109; new DataView(m.buffer).setFloat64(1,cap,true); m.set(new Uint8Array(o.buffer),9); out(m);};
     const z=ctx.createGain(); z.gain.value=0; src.connect(proc); proc.connect(z); z.connect(ctx.destination);
   }catch(e){ started=false; $("start").disabled=false; $("start").textContent="Start talking to __TITLE__"; alert("Camera/microphone: "+(e.message||e)); return; }
   $("go").hidden=true; $("ui").hidden=false; requestAnimationFrame(show); wake();

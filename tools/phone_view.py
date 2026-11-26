@@ -634,7 +634,10 @@ $("start").onclick=()=>{ if(ctx&&ctx.state!=="running") ctx.resume().catch(()=>{
 document.addEventListener("touchend",()=>{ if(ctx&&ctx.state!=="running") ctx.resume().then(()=>{$("resume").hidden=ctx.state==="running";}).catch(()=>{}); },{passive:true});
 $("resumeb").onclick=async()=>{ await ctx.resume().catch(()=>{}); $("resume").hidden=ctx.state==="running"; };
 $("camb").onclick=()=>{ $("camctl").hidden=!$("camctl").hidden; };
-$("mute").onclick=()=>{micOn=!micOn; $("mute").textContent=micOn?"Mic on":"Mic muted"; $("mute").className=micOn?"":"off";};
+function showMic(){ $("mute").textContent=micOn?"Mic on":"Mic muted"; $("mute").className=micOn?"":"off"; }
+try{ micOn=localStorage.getItem("micOn")!=="0"; }catch(_){}           // mic state survives a reload
+showMic();
+$("mute").onclick=()=>{micOn=!micOn; showMic(); try{localStorage.setItem("micOn",micOn?"1":"0");}catch(_){} };
 // the slider hides behind the Sync button (a stray swipe on the always-visible slider set -400 unnoticed, 2026-11-26)
 function setOff(v){ userOff=v; $("off").value=v; $("syncb").textContent="Sync "+(v>0?"+":"")+v; }
 setOff(userOff);

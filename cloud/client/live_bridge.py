@@ -1189,6 +1189,31 @@ async def main():
                         await restart_session(f"JoyAI stalled ({now - last_in:.0f} s without output while sending): "
                                               f"restarting the session")
 
+            async def ff_watch():
+                """Log why the face pass is off (once a second while it is, and when it comes back): the gates on
+                your face (turn, pitch, covered mouth, weak detection) AND on the character's face (JoyAI renders it
+                turned / tilted / not found) -- the latter looked 'random' from the outside."""
+                was_on, t_off = True, 0.0
+                while not stop.is_set():
+                    await asyncio.sleep(1.0)
+                    if ff is None or not sess["ff_on"] or sess["state"] != "running":
+                        continue
+                    w, g = float(ff.lp.w), dict(ff.lp.gate_info)
+                    if w < 0.5:
+                        why = [f"no {g['no_face']} face"] if g.get("no_face") else []
+                        why += [f"{k}={g.get(v)}" for k, v, gk in (("your yaw", "drv_yaw", "g_pose"),
+                                ("your pitch", "drv_pitch_rel", "g_pose"), ("mouth visible", "mouth_vis", "g_cover"),
+                                ("face score", "face_score", "g_score"), ("character yaw", "src_yaw", "g_src"),
+                                ("character pitch", "src_pitch", "g_src")) if g.get(gk, 1.0) < 0.99]
+                        if was_on:
+                            t_off = time.time()
+                        print(f"[facefix] OFF (w {w:.2f}) {time.time() - t_off:.0f} s: {', '.join(why) or 'fading'}",
+                              flush=True)
+                        was_on = False
+                    elif not was_on:
+                        print(f"[facefix] back ON after {time.time() - t_off:.1f} s", flush=True)
+                        was_on = True
+
             async def pinger():
                 while not stop.is_set():
                     await ws.send(json.dumps({"type": "ping", "t": time.time() * 1000, "recv": received}))
@@ -1323,7 +1348,7 @@ async def main():
                               flush=True)
 
             try:
-                tasks = [asyncio.create_task(c()) for c in (sender, receiver, pinger, player, controller, stall_watch)]
+                tasks = [asyncio.create_task(c()) for c in (sender, receiver, pinger, player, controller, stall_watch, ff_watch)]
                 await asyncio.gather(*tasks)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 quit_ev.set()

@@ -714,9 +714,15 @@ class LPPass:
                 # a hand passing by); fades as usual only if it stays closed past gate_hold frames
                 drv, self._gated, g_drv = self._last_good_drv, self._gated + 1, 1.0
                 held.append("gate")
-            target = min(ramp(yaw, self.yaw_gate), ramp(pitch, self.pitch_gate), g_drv)
+            g_src = min(ramp(yaw, self.yaw_gate), ramp(pitch, self.pitch_gate))   # the CHARACTER's face pose
+            self.gate_info.update(src_yaw=round(yaw, 1), src_pitch=round(pitch, 1), g_src=round(g_src, 2))
+            target = min(g_src, g_drv)
         fade_out = 2 * self.fade if self.gate_info.get("g_cover", 1.0) < 1 else self.fade  # covers: drop fast
         self.w = min(target, self.w + self.fade) if target > self.w else max(target, self.w - fade_out)
+        if s is None or drv is None:       # say which face is missing (the console / log show why it is off)
+            self.gate_info["no_face"] = "character" if s is None else "driver"
+        else:
+            self.gate_info.pop("no_face", None)
         ok = ok and self.w > 0
         info = {"ok": ok, "w": self.w, **self.gate_info}
         if held:

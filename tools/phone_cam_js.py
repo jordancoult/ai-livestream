@@ -13,6 +13,10 @@ CAM_JS = r"""
 function CamEngine(o){
   const v=o.video, nowMs=()=>performance.timeOrigin+performance.now();
   let track=null, enc=null, q=[], sq=0, FW=0, FH=0, ROT=0, rotUser=0, forceKey=false, devices=[], cur=null, nEnc=0, encMs=[];
+  // settings survive a reload (this phone's browser storage): camera, zoom per camera, manual rotation
+  const SK="camsettings", load=()=>{ try{ return JSON.parse(localStorage.getItem(SK))||{}; }catch(_){ return {}; } };
+  const save=p=>{ try{ localStorage.setItem(SK,JSON.stringify({...load(),...p})); }catch(_){} };
+  rotUser=(load().rot|0)&3;
   const short=l=>{ l=(l||"").toLowerCase();
     if(l.includes("front")) return "Front"; if(l.includes("ultra")) return "Ultra Wide"; if(l.includes("tele")) return "Tele";
     if(l.includes("triple")) return "Triple"; if(l.includes("dual wide")) return "Dual Wide"; if(l.includes("dual")) return "Dual";
@@ -23,8 +27,11 @@ function CamEngine(o){
   function zoomUI(){ const z=document.getElementById("zoom"), zv=document.getElementById("zoomv"); if(!z) return;
     const c=track&&track.getCapabilities?track.getCapabilities():{};
     if(c.zoom&&c.zoom.max>c.zoom.min){ z.hidden=false; z.min=c.zoom.min; z.max=Math.min(c.zoom.max,10); z.step=0.1;
-      z.value=(track.getSettings().zoom||c.zoom.min); if(zv) zv.textContent=(+z.value).toFixed(1)+"×";
-      z.oninput=()=>{ track.applyConstraints({advanced:[{zoom:+z.value}]}).catch(()=>{}); if(zv) zv.textContent=(+z.value).toFixed(1)+"×"; };
+      const want=(load().zoom||{})[cur];          // this camera's saved zoom
+      if(want&&want>=c.zoom.min&&want<=c.zoom.max) track.applyConstraints({advanced:[{zoom:want}]}).catch(()=>{});
+      z.value=want||(track.getSettings().zoom||c.zoom.min); if(zv) zv.textContent=(+z.value).toFixed(1)+"×";
+      z.oninput=()=>{ track.applyConstraints({advanced:[{zoom:+z.value}]}).catch(()=>{}); if(zv) zv.textContent=(+z.value).toFixed(1)+"×";
+        save({zoom:{...(load().zoom||{}),[cur]:+z.value}}); };
     } else { z.hidden=true; if(zv) zv.textContent=""; } }
   async function configure(){
     if(!v.videoWidth) await new Promise(r=>v.onloadedmetadata=r);
@@ -44,6 +51,7 @@ function CamEngine(o){
     const s=await navigator.mediaDevices.getUserMedia({video:{deviceId:id?{exact:id}:undefined,facingMode:id?undefined:"user",
       width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30}}});
     track=s.getVideoTracks()[0]; cur=track.getSettings().deviceId||id; v.srcObject=new MediaStream([track]);
+    if(id) save({cam:cur});
     // iOS pauses the camera in the background: mute -> unmute (keyframe), or it ends the track (restart it)
     track.onunmute=()=>{ forceKey=true; }; track.onended=()=>{ setTimeout(()=>ensure(),300); };
     v.style.transform=short(track.label)==="Front"?"scaleX(-1)":"none";   // preview mirrored only for the selfie camera
@@ -72,12 +80,13 @@ function CamEngine(o){
     finally{ busy=false; } }
   return {
     ensure,
-    async start(){ await switchTo(null);
+    async start(){ const sc=load().cam;
+      if(sc){ try{ await switchTo(sc); }catch(_){ await switchTo(null); } } else await switchTo(null);   // last used camera
       devices=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==="videoinput");
       // front first, then back cameras from widest to longest
       const rank=d=>({"Front":0,"Ultra Wide":1,"Wide":2,"Tele":3,"Dual Wide":4,"Dual":5,"Triple":6}[short(d.label)]??9);
       devices.sort((a,b)=>rank(a)-rank(b)); buttons();
-      const rb=document.getElementById("rot"); if(rb) rb.onclick=()=>{ rotUser=(rotUser+1)&3; configure(); };
+      const rb=document.getElementById("rot"); if(rb) rb.onclick=()=>{ rotUser=(rotUser+1)&3; save({rot:rotUser}); configure(); };
       loop(); },
     switchTo, key(){ const n=nowMs(); if(n-lastKey>500){ lastKey=n; forceKey=true; } },   // at most 2 keyframes/s
     restarts:()=>restarts,

@@ -170,6 +170,8 @@ class Hub:
         print("[phone] camera reader connected", flush=True)
         try:
             await r.read()     # until it disconnects
+        except (ConnectionError, OSError):
+            pass
         finally:
             self.cam_out.discard(w)
 

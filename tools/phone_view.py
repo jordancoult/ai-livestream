@@ -62,6 +62,18 @@ def lan_ip(iface=None):
 
 
 def cert(ip):
+    """Signed by the local CA (tools/local_ca.py; the phone trusts it once): no warning, and Safari's WebSockets
+    connect (with a self-signed certificate they can hang)."""
+    import sys as _s
+    _s.path.insert(0, str(REPO / "tools"))
+    from local_ca import server_cert
+    crt, key = server_cert([ip], REPO / ".tmp" / "phone_cert")
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(crt, key)
+    return ctx
+
+
+def cert_selfsigned(ip):
     d = REPO / ".tmp" / "phone_cert"
     d.mkdir(parents=True, exist_ok=True)
     crt, key, tag = d / "cert.pem", d / "key.pem", d / "ip.txt"
@@ -333,6 +345,14 @@ class Hub:
     def http(self, conn, req):
         if req.path.startswith("/ws"):
             return None  # WebSocket upgrade
+        if req.path.split("?")[0] == "/ca.crt":   # the local CA, for the phone to install + trust once
+            from local_ca import CA_DER, ensure_ca
+            ensure_ca()
+            body = CA_DER.read_bytes()
+            return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "application/x-x509-ca-cert"),
+                                                               ("Content-Disposition", 'attachment; filename="ai-livestream-local-ca.crt"'),
+                                                               ("Content-Length", str(len(body)))]), body)
+
         if req.path.split("?")[0] == "/stats" and f"t={self.a.token}" in req.path:
             body = json.dumps(self.stats()).encode()
             return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "application/json"),

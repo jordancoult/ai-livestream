@@ -43,6 +43,18 @@ def iface_ips():
 
 
 def cert(ips):
+    """Signed by the local CA (tools/local_ca.py): once the phone trusts the CA, pages AND WebSockets just work."""
+    import ssl
+    import sys as _s
+    _s.path.insert(0, str(REPO / "tools"))
+    from local_ca import server_cert
+    crt, key = server_cert(ips, OUT)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(crt, key)
+    return ctx
+
+
+def cert_selfsigned(ips):
     import ssl
     OUT.mkdir(parents=True, exist_ok=True)
     crt, key, tag = OUT / "cert.pem", OUT / "key.pem", OUT / "ips.txt"
@@ -171,7 +183,8 @@ class Link:
                     except ValueError:
                         pass
         except Exception:  # noqa: BLE001
-            pass
+            import traceback
+            print("[link] connection error:\n" + traceback.format_exc(), flush=True)
         finally:
             pt.cancel()
             if self.ws is ws:
@@ -197,8 +210,20 @@ class Link:
                 "phone": self.phone if self.phone and now - self.phone.get("t", 0) < 5 else {}}
 
     def http(self, conn, req):
+        try:
+            peer = conn.remote_address[0]
+        except Exception:  # noqa: BLE001
+            peer = "?"
+        print(f"[link] request {req.path.split('?')[0][:12]}… from {peer}", flush=True)
         if req.path.startswith("/ws"):
             return None
+        if req.path.split("?")[0] == "/ca.crt":   # the local CA, for the phone to install + trust once
+            from local_ca import CA_DER, ensure_ca
+            ensure_ca()
+            body = CA_DER.read_bytes()
+            return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "application/x-x509-ca-cert"),
+                                                               ("Content-Disposition", 'attachment; filename="ai-livestream-local-ca.crt"'),
+                                                               ("Content-Length", str(len(body)))]), body)
         p = req.path.split("?")[0]
         if (p == "/" and f"t={self.a.token}" in req.path) or p.rstrip("/") == f"/{self.a.token}":
             body = PHONE_PAGE.replace("__TOKEN__", self.a.token).replace("__BITRATE__", str(self.a.bitrate)).encode()
@@ -284,7 +309,7 @@ PHONE_PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
 #p{padding:12px} button{font:600 17px -apple-system;border:0;border-radius:22px;padding:12px 22px;background:#2e7d32;color:#fff}
 pre{font:13px ui-monospace,monospace;white-space:pre-wrap}</style></head><body>
 <video id="me" playsinline muted autoplay></video>
-<div id="p"><button id="go">Start link test</button><pre id="st">Camera + mic go to the laptop only (local network).</pre></div>
+<div id="p"><button id="go">Start link test</button><div id="sock" style="font:13px ui-monospace,monospace;margin:6px 0;color:#e0a03a">socket: –</div><pre id="st">Camera + mic go to the laptop only (local network).</pre></div>
 <script>
 const T="__TOKEN__", BR=__BITRATE__, $=id=>document.getElementById(id);
 const now=()=>performance.timeOrigin+performance.now();
@@ -292,11 +317,14 @@ let ws, enc=null, seq=0, nEnc=0, nSent=0, encMs=[], kind="", fpsT=now();
 function hdr(tag,cap,sq,key){const b=new ArrayBuffer(14); const v=new DataView(b); v.setUint8(0,tag); v.setFloat64(1,cap,true); v.setUint32(9,sq,true); v.setUint8(13,key===true?1:(key|0)); return new Uint8Array(b);}
 function send(tag,cap,sq,key,data){ if(!ws||ws.readyState!==1)return; if(ws.bufferedAmount>2e6) return; // link can't keep up: drop
   const h=hdr(tag,cap,sq,key), o=new Uint8Array(h.length+data.byteLength); o.set(h,0); o.set(new Uint8Array(data),h.length); ws.send(o); nSent++; }
-function connect(){ ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); ws.binaryType="arraybuffer";
+let nTry=0;
+function sock(m,ok){ $("sock").textContent="socket: "+m; $("sock").style.color=ok?"#3fb27f":"#e0a03a"; }
+function connect(){ nTry++; sock(`connecting (try ${nTry})…`); try{ ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); }catch(e){ sock("can't open: "+e.message); setTimeout(connect,1500); return; }
+  ws.binaryType="arraybuffer"; ws.onerror=()=>sock(`error (try ${nTry})`);
   ws.onmessage=e=>{const d=new DataView(e.data); if(d.getUint8(0)===80){ // 'P' ping: echo with our clock
       const o=new ArrayBuffer(17), v=new DataView(o); v.setUint8(0,81); v.setFloat64(1,d.getFloat64(1,true),true); v.setFloat64(9,now(),true); ws.send(o);} };
-  ws.onopen=()=>report({hello:navigator.userAgent, webcodecs:"VideoEncoder" in window, rvfc:"requestVideoFrameCallback" in HTMLVideoElement.prototype});
-  ws.onclose=()=>setTimeout(connect,1000); }
+  ws.onopen=()=>{ sock("open — sending to the laptop",true); report({hello:navigator.userAgent, webcodecs:"VideoEncoder" in window, rvfc:"requestVideoFrameCallback" in HTMLVideoElement.prototype}); };
+  ws.onclose=e=>{ sock(`closed (code ${e.code}${e.reason?": "+e.reason:""}), retrying…`); setTimeout(connect,1000); }; }
 function report(o){ if(ws&&ws.readyState===1) ws.send(new TextEncoder().encode("S"+JSON.stringify(o))); }
 function fail(where,e){ const m=`${where}: ${e&&e.name?e.name+": ":""}${e&&e.message||e}`; $("st").textContent="ERROR "+m; $("go").hidden=false; report({error:m}); }
 window.addEventListener("error",e=>fail("page",e.error||e.message)); window.addEventListener("unhandledrejection",e=>fail("page",e.reason));
@@ -355,11 +383,17 @@ td{padding:3px 10px;border-bottom:1px solid #2a2f37;font-variant-numeric:tabular
 <h1>Phone link test</h1>
 <div style="display:flex;gap:16px;align-items:center;margin-bottom:12px"><div id="qr" style="background:#fff;padding:8px;border-radius:6px;line-height:0"></div>
 <div><div style="color:#8b939e">Scan with the phone camera (the phone on the Beryl uses the first link):</div><div id="urls"></div></div></div>
+<details style="margin:0 0 12px"><summary style="cursor:pointer;color:#e0a03a">First time on a phone: install the local certificate (once)</summary>
+<div style="display:flex;gap:16px;align-items:center;margin-top:8px"><div id="qrca" style="background:#fff;padding:8px;border-radius:6px;line-height:0"></div>
+<ol style="margin:0;color:#c8ccd2;line-height:1.6"><li>Scan, open, accept the warning one last time → <b>Allow</b> the download</li>
+<li>Settings → <b>Profile Downloaded</b> → Install</li><li>Settings → General → About → <b>Certificate Trust Settings</b> → turn on "ai-livestream local CA (LAN only)"</li>
+<li>Valid only for local addresses (192.168.x.x): it can't vouch for any website. Remove any time: Settings → General → VPN &amp; Device Management.</li></ol></div></details>
 <div class="wrap"><img id="v" src="/video"><table id="t"></table></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 const urls=__URLS__; document.getElementById("urls").innerHTML=urls.map(([n,u])=>`<div>${n}: <code>${u}</code></div>`).join("");
 if(window.QRCode&&urls.length) new QRCode(document.getElementById("qr"),{text:urls[0][1],width:170,height:170,correctLevel:QRCode.CorrectLevel.M});
+if(window.QRCode&&urls.length) new QRCode(document.getElementById("qrca"),{text:urls[0][1].replace(/\/[^\/]+$/,"/ca.crt"),width:150,height:150,correctLevel:QRCode.CorrectLevel.M});
 const c=(v,good,ok)=>v==null?"":(v<=good?"ok":v<=ok?"warn":"bad");
 async function tick(){ const s=await (await fetch("/stats")).json(), p=s.phone||{}, L=s.latency_ms, G=s.gap_ms, A=s.audio_latency_ms;
  const rows=[["connected",s.connected],["stream",s.kind||"–"],["phone camera",p.camera||"–"],

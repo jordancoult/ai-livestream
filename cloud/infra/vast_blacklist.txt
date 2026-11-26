@@ -1,3 +1,4 @@
-# Vast machine IDs never to rent (vast.sh search skips them). One per line: <machine_id>  # date, reason
-156320  # 2026-11-26 California RTX 5090: host caps the GPU at 400 W (default 575): JoyAI 23.4 fps box-local vs 27.3 (DiT 302 vs 215 ms/chunk)
-147713  # 2026-11-26 Texas RTX 5090: host caps the GPU at 450 W (default 600): sustained bf16 GEMM 200 TFLOPS at 2.4 GHz (uncapped ~230); PCIe H2D 14 GB/s
+# Vast machines to skip, per pipeline profile (vast.sh search with PROFILE=... skips matching ones).
+# One per line: <machine_id> [profiles, comma-separated; none = all]  # date, reason
+156320 joyai,ll,ll2  # 2026-11-26 California RTX 5090: host caps the GPU at 400 W (default 575): JoyAI 23.4 fps box-local vs 27.3 (DiT 302 vs 215 ms/chunk)
+147713 joyai,ll,ll2  # 2026-11-26 Texas RTX 5090: host caps the GPU at 450 W (default 600): sustained bf16 GEMM 200 TFLOPS at 2.4 GHz (uncapped ~230); PCIe H2D 14 GB/s

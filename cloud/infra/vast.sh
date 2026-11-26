@@ -1,6 +1,7 @@
 #!/bin/bash
 # Vast.ai helper (API key in .secrets/vast_api_key, never printed).
 #   vast.sh search            US/CA RTX 5090 offers suitable for our pipelines, cheapest first (incl. download cost)
+#                             PROFILE=voice: any NVIDIA GPU >= 8 GB instead (a voice-only box); the blacklist is per profile
 #   vast.sh search-any        same, any country
 #   vast.sh create OFFER_ID   rent it (image runpod/pytorch cu128, 150 GB disk, SSH + port 8080, our public key)
 #   vast.sh show              my instances (id, status, ssh host/port)
@@ -20,14 +21,19 @@ case "${1:-}" in
               # cheapest first, by hourly price + the one-time cost of downloading our ~50 GB of weights
               # (Vast hosts set their own $/GB download price; there's no cross-host storage, so every new host downloads)
               GEO=$([ "$1" = search ] && echo " geolocation in [US,CA]")
-              $V --api-key "$KEY" --raw search offers "$Q inet_down_cost<=0.02$GEO" -o 'dph_total' | python3 -c '
+              QQ="$Q"; [ "${PROFILE:-joyai}" = voice ] && QQ='num_gpus=1 gpu_ram>=8 cpu_ram>=16 disk_space>=40 cuda_vers>=12.4 inet_down>=200 reliability>0.97 direct_port_count>=1 rentable=true'
+              $V --api-key "$KEY" --raw search offers "$QQ inet_down_cost<=0.02$GEO" -o 'dph_total' | python3 -c '
 import sys, json
 o = json.load(sys.stdin)
 import os, re
 bl = set()
 p = os.path.join(os.environ["R"], "cloud/infra/vast_blacklist.txt")
 if os.path.exists(p):
-    bl = {int(m.group(1)) for ln in open(p) for m in [re.match(r"\s*(\d+)", ln)] if m}
+    prof = os.environ.get("PROFILE", "joyai")
+    for ln in open(p):
+        m = re.match(r"\s*(\d+)\s*([a-z0-9,]*)", ln.split("#")[0])
+        if m and (not m.group(2) or prof in m.group(2).split(",")):
+            bl.add(int(m.group(1)))
 o = [x for x in o if x.get("machine_id") not in bl]
 for x in o: x["dl50"] = 50 * (x.get("inet_down_cost") or 0)
 o.sort(key=lambda x: x["dph_total"] + x["dl50"] / 3)   # amortize the download over a ~3 h session

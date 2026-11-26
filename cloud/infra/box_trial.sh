@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rent a Vast offer and run the acceptance check before committing to it:
-#   cloud/infra/box_trial.sh OFFER_ID [pod file name, default .pod.trial]
+#   [PROFILE=joyai|ll|ll2|voice] cloud/infra/box_trial.sh OFFER_ID [pod file name, default .pod.trial]
 # ACCEPT -> keeps it (pod file written). REJECT -> destroys it and blacklists its machine_id (with the reason).
 set -u
 cd "$(dirname "$0")/../.."
@@ -16,8 +16,8 @@ set -- $S; [ "${1:-}" = running ] || { echo "trial: never came up ($S): destroyi
 MID=$4; GEO=$5; echo "$2 $3" > "$PF"
 for i in $(seq 1 15); do POD_FILE=$PF timeout 20 bash cloud/infra/pod.sh true 2>/dev/null && break; sleep 10; done
 echo "trial: machine $MID ($GEO), ping from here: $(ping -c 4 -q "$2" | tail -1 | awk -F/ '{print $5}') ms"
-OUT=$(bash cloud/infra/box_check.sh "$PF"); echo "$OUT" | sed 's/^VERDICT \([A-Z]*\).*/VERDICT \1/'
+OUT=$(bash cloud/infra/box_check.sh "$PF" "${PROFILE:-joyai}"); echo "$OUT" | sed 's/^VERDICT \([A-Z]*\).*/VERDICT \1/'
 if echo "$OUT" | grep -q "^VERDICT ACCEPT"; then echo "trial: ACCEPTED instance $ID -> $PF"; exit 0; fi
 WHY=$(echo "$OUT" | grep FAIL | sed 's/^ *FAIL *//' | tr -s ' ' | paste -sd ';' | cut -c1-160)
-echo "$MID  # $(date +%F) $GEO: box_check REJECT: $WHY" >> cloud/infra/vast_blacklist.txt
+echo "$MID ${PROFILE:-joyai}  # $(date +%F) $GEO: box_check REJECT (${PROFILE:-joyai}): $WHY" >> cloud/infra/vast_blacklist.txt
 bash cloud/infra/vast.sh destroy "$ID" >/dev/null 2>&1; rm -f "$PF"; echo "trial: REJECTED, destroyed, machine $MID blacklisted"; exit 1

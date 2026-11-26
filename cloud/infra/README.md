@@ -20,7 +20,20 @@ machine (adjacent machine IDs, same RAM/host pattern).
 
 ## Box acceptance (`cloud/infra/box_check.py`, run by `box_check.sh` / `box_trial.sh` / `bring_up.sh`)
 
-Hard rules (any FAIL = reject):
+Requirements depend on the pipeline: **profiles** in `box_check.py` `PROFILES`, selected with `PROFILE=` (trial,
+search) or the box_check.sh second argument; `bring_up.sh <pipeline>` passes its own (joyai, ll).
+
+| Profile | GPU | Power cap | GEMM | Other |
+|---|---|---|---|---|
+| `joyai` | RTX 5090, 30 GB | not allowed | >= 205 TFLOPS | attention >= 100, mem >= 1300 GB/s, PCIe >= 10, RAM 48 GB, disk 100 GB |
+| `ll` (LongLive 1) | RTX 5090 | not allowed | >= 205 | as joyai, disk 150 GB |
+| `ll2` (LongLive 2.0, 1280x704 >= 25 fps) | RTX 5090 | not allowed | >= 205 | as joyai, RAM 64 GB, disk 150 GB |
+| `voice` (RVC only) | any NVIDIA, 8 GB | allowed (warning) | >= 30 | mem >= 300, RAM 16 GB, disk 30 GB (`PROFILE=voice vast.sh search`: ~$0.08-0.10/h) |
+
+The blacklist is per profile too: `<machine_id> joyai,ll,ll2  # reason` (no profiles = skip for everything), so a
+capped 5090 is skipped for JoyAI but can still serve as a voice box.
+
+The `joyai` profile's hard rules (any FAIL = reject):
 
 | Check | Threshold | Why |
 |---|---|---|

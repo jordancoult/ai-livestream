@@ -13,7 +13,7 @@ for f in cloud/infra/vast_watchdog.sh cloud/infra/vast_heartbeat.sh; do put $f /
 case $NAME in
   joyai)
     # acceptance check before the ~20 min install (power cap, sustained speed, memory, PCIe, CPU, RAM): FORCE=1 skips
-    if [ "${FORCE:-0}" != 1 ] && ! bash cloud/infra/box_check.sh "$POD_FILE"; then
+    if [ "${FORCE:-0}" != 1 ] && ! bash cloud/infra/box_check.sh "$POD_FILE" joyai; then
       echo "bring_up: box_check rejected this box (destroy it, add its machine_id to cloud/infra/vast_blacklist.txt; FORCE=1 to override)"; exit 1
     fi
     for f in cloud/pipelines/joyai/setup.sh cloud/pipelines/joyai/run_server.sh cloud/pipelines/joyai/save_cache.sh; do put $f /workspace/; done
@@ -22,6 +22,9 @@ case $NAME in
     P 'chmod 600 /root/.cache/huggingface/token; cd /workspace && (JOYAI_DATA=/workspace setsid nohup bash -c "bash setup.sh all && setsid nohup bash -c \"bash run_server.sh; echo EXIT=\\\$?\" > logs/server.log 2>&1 < /dev/null" > logs/setup.log 2>&1 < /dev/null &); echo setup started'
     for i in $(seq 1 120); do s=$(P 'grep -hE "Application startup complete|Traceback|EXIT=|rror:|× No solution" /workspace/logs/setup.log /workspace/logs/server.log 2>/dev/null | tail -n 2' 30); [ -n "$s" ] && { echo "$s"; break; }; sleep 20; done ;;
   ll)
+    if [ "${FORCE:-0}" != 1 ] && ! bash cloud/infra/box_check.sh "$POD_FILE" ll; then
+      echo "bring_up: box_check (profile ll) rejected this box (FORCE=1 to override)"; exit 1
+    fi
     P 'cd /workspace && git clone -q https://github.com/jordancoult/ai-livestream.git ail && git clone -q -b blackwell-realtime https://github.com/jordancoult/scope.git ail/scope && cd ail && mkdir -p .tmp && (setsid nohup bash -c "bash cloud/pipelines/longlive1/setup_box.sh && HF_HUB_ENABLE_HF_TRANSFER=0 bash cloud/pipelines/longlive1/models_box.sh > .tmp/models.log 2>&1 && setsid nohup bash cloud/pipelines/longlive1/live_cloud.sh > .tmp/live_cloud.log 2>&1 < /dev/null" > .tmp/setup.out 2>&1 < /dev/null &); echo setup started'
     P 'mkdir -p /workspace/ail/assets'; put $(ls assets/*.png) /workspace/ail/assets/   # refs / start images (not in git)
     for i in $(seq 1 90); do s=$(P 'cd /workspace/ail; grep -h "waiting for the camera\|text-to-video\|MISSING\|Traceback" .tmp/live_cloud.log .tmp/models.log 2>/dev/null | tail -n 1' 30); [ -n "$s" ] && { echo "$s"; break; }; sleep 20; done ;;

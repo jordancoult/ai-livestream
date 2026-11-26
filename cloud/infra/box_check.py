@@ -16,6 +16,23 @@ import torch
 
 RES = {}
 
+# Requirements per pipeline (bring_up.sh passes its pipeline name). A threshold of None = not checked.
+#   power_default: the host must not cap the GPU's power (a cap throttles clocks: JoyAI -15 %)
+PROFILES = {
+    # JoyAI live character swap: 8-frame chunks must stay >= ~25 fps (box-local ~27 on a good 5090)
+    "joyai": dict(gpus=["RTX 5090"], vram_gb=30, power_default=True, gemm=205, attn=100, mem=1300, h2d=10,
+                  cpu_s=0.45, ram_gb=48, disk_gb=100),
+    # LongLive 1 relay: same GPU class and speed needs as JoyAI (per-chunk GPU time = the laptop's budget)
+    "ll": dict(gpus=["RTX 5090"], vram_gb=30, power_default=True, gemm=205, attn=100, mem=1300, h2d=10,
+               cpu_s=0.45, ram_gb=48, disk_gb=150),
+    # LongLive 2.0: native 1280x704 at >= 25 fps (memory: ll2-native-resolution); heavier weights
+    "ll2": dict(gpus=["RTX 5090"], vram_gb=30, power_default=True, gemm=205, attn=100, mem=1300, h2d=10,
+                cpu_s=0.45, ram_gb=64, disk_gb=150),
+    # voice only (RVC, ~17 ms per 200 ms block on a laptop 5080): any recent NVIDIA GPU, a power cap is fine
+    "voice": dict(gpus=None, vram_gb=8, power_default=False, gemm=30, attn=None, mem=300, h2d=3,
+                  cpu_s=0.6, ram_gb=16, disk_gb=30),
+}
+
 
 def smi(q):
     return subprocess.run(["nvidia-smi", f"--query-gpu={q}", "--format=csv,noheader,nounits"], capture_output=True,
@@ -34,9 +51,13 @@ def timed(fn, sec):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", default=None)
+    ap.add_argument("--profile", default="joyai", choices=sorted(PROFILES))
     a = ap.parse_args()
+    P = PROFILES[a.profile]
+    RES["profile"] = a.profile
     dev = torch.cuda.get_device_properties(0)
     RES["gpu"] = dev.name
+    RES["vram_gb"] = round(dev.total_memory / 2 ** 30)
     q = subprocess.run(["nvidia-smi", "-q", "-d", "POWER"], capture_output=True, text=True).stdout
     def watt(key):
         for ln in q.splitlines():
@@ -78,17 +99,18 @@ def main():
     RES["load_avg"] = round(os.getloadavg()[0], 1)
 
     # verdicts (thresholds documented in cloud/infra/README.md)
-    rules = [
-        ("gpu", "RTX 5090" in RES["gpu"], True, RES["gpu"]),
-        ("gemm_tflops >= 205 (sustained, 20 s)", RES["gemm_tflops"] >= 205, True, RES["gemm_tflops"]),
-        ("attn_tflops >= 100", RES["attn_tflops"] >= 100, True, RES["attn_tflops"]),
-        ("mem_gbs >= 1300", RES["mem_gbs"] >= 1300, True, RES["mem_gbs"]),
-        ("h2d_gbs >= 10 (PCIe; frames are small)", RES["h2d_gbs"] >= 10, True, RES["h2d_gbs"]),
-        ("cpu_single_s <= 0.45", RES["cpu_single_s"] <= 0.45, True, RES["cpu_single_s"]),
-        ("ram_gb >= 48", RES["ram_gb"] >= 48, True, RES["ram_gb"]),
-        ("disk_free_gb >= 100 (before the install)", RES["disk_free_gb"] >= 100, False, RES["disk_free_gb"]),
-        ("power limit = card default (no host cap)", (RES["power_limit_w"] or 0) >= 0.95 * (RES["power_default_w"] or 1), True,
-         f"{RES['power_limit_w']} / {RES['power_default_w']} W"),
+    pw_ok = (RES["power_limit_w"] or 0) >= 0.95 * (RES["power_default_w"] or 1)
+    rules = [   # (name, ok, hard, value)
+        (f"gpu in {P['gpus'] or 'any'}", not P["gpus"] or any(g in RES["gpu"] for g in P["gpus"]), True, RES["gpu"]),
+        (f"vram_gb >= {P['vram_gb']}", RES["vram_gb"] >= P["vram_gb"], True, RES["vram_gb"]),
+        ("power limit = card default (no host cap)", pw_ok, P["power_default"], f"{RES['power_limit_w']} / {RES['power_default_w']} W"),
+        (f"gemm_tflops >= {P['gemm']} (sustained, 20 s)", RES["gemm_tflops"] >= P["gemm"], True, RES["gemm_tflops"]),
+        (f"attn_tflops >= {P['attn']}", P["attn"] is None or RES["attn_tflops"] >= P["attn"], True, RES["attn_tflops"]),
+        (f"mem_gbs >= {P['mem']}", RES["mem_gbs"] >= P["mem"], True, RES["mem_gbs"]),
+        (f"h2d_gbs >= {P['h2d']} (PCIe)", RES["h2d_gbs"] >= P["h2d"], True, RES["h2d_gbs"]),
+        (f"cpu_single_s <= {P['cpu_s']}", RES["cpu_single_s"] <= P["cpu_s"], True, RES["cpu_single_s"]),
+        (f"ram_gb >= {P['ram_gb']}", RES["ram_gb"] >= P["ram_gb"], True, RES["ram_gb"]),
+        (f"disk_free_gb >= {P['disk_gb']} (before the install)", RES["disk_free_gb"] >= P["disk_gb"], False, RES["disk_free_gb"]),
         ("load_avg < 4 (no other tenant)", RES["load_avg"] < 4, False, RES["load_avg"]),
     ]
     fail = False
@@ -97,7 +119,7 @@ def main():
         fail |= (not ok) and hard
         print(f"  {tag:4s}  {name:44s} {val}")
     RES["verdict"] = "REJECT" if fail else "ACCEPT"
-    print(f"VERDICT {RES['verdict']}  {json.dumps(RES)}")
+    print(f"VERDICT {RES['verdict']} (profile {a.profile})  {json.dumps(RES)}")
     if a.json:
         open(a.json, "w").write(json.dumps(RES, indent=2))
     sys.exit(1 if fail else 0)

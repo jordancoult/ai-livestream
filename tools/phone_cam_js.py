@@ -48,18 +48,21 @@ function CamEngine(o){
     track.onunmute=()=>{ forceKey=true; }; track.onended=()=>{ setTimeout(()=>ensure(),300); };
     v.style.transform=short(track.label)==="Front"?"scaleX(-1)":"none";   // preview mirrored only for the selfie camera
     await v.play().catch(()=>{}); await configure(); buttons(); zoomUI(); }
+  // one frame loop only: each (re)start bumps loopGen and the old loop's callbacks stop (the watchdog used to add a
+  // second loop beside a merely paused first one: every frame encoded twice = 60 fps, 2026-11-26)
+  let loopGen=0;
+  function loop(){ const g=++loopGen; const cb=(t,m)=>{ if(g!==loopGen) return; step(t,m); v.requestVideoFrameCallback(cb); }; v.requestVideoFrameCallback(cb); }
   function step(t,meta){ lastStep=nowMs(); if(enc&&enc.state==="configured"&&enc.encodeQueueSize<2){
       const cap=meta&&meta.captureTime?performance.timeOrigin+meta.captureTime:nowMs();
       try{ const f=new VideoFrame(v,{timestamp:Math.round((meta&&meta.mediaTime||t/1000)*1e6)});
         if((f.displayWidth&~1)!==FW||(f.displayHeight&~1)!==FH){ f.close(); configure(); }   // camera changed size
         else { sq++; q.push({cap,sq,t0:nowMs()}); enc.encode(f,{keyFrame:forceKey||sq%60===1}); forceKey=false; f.close(); }
-      }catch(e){} }
-    v.requestVideoFrameCallback(step); }
+      }catch(e){} } }
   let busy=false, lastOut=nowMs(), lastStep=nowMs(), restarts=0, lastKey=0;
   // watchdog: iOS's hardware encoder can stall (queue stuck, no output, no error) -- seen 2026-11-26 after a burst of
   // keyframe requests on bad Wi-Fi: the stream froze until a reload. Restart whatever stopped, within ~1.5 s.
   setInterval(()=>{ if(busy||!track||document.visibilityState!=="visible") return; const now=nowMs();
-    if(now-lastStep>1500){ restarts++; lastStep=now; v.play().catch(()=>{}); v.requestVideoFrameCallback(step); }
+    if(now-lastStep>1500){ restarts++; lastStep=now; v.play().catch(()=>{}); loop(); }
     else if(now-lastOut>1500&&enc){ restarts++; lastOut=now; if(restarts%3===0) ensure(); else configure(); } },500);
   async function ensure(){   // after the page comes back: camera, encoder and frame loop alive? else restart them
     if(busy) return; busy=true;
@@ -75,7 +78,7 @@ function CamEngine(o){
       const rank=d=>({"Front":0,"Ultra Wide":1,"Wide":2,"Tele":3,"Dual Wide":4,"Dual":5,"Triple":6}[short(d.label)]??9);
       devices.sort((a,b)=>rank(a)-rank(b)); buttons();
       const rb=document.getElementById("rot"); if(rb) rb.onclick=()=>{ rotUser=(rotUser+1)&3; configure(); };
-      v.requestVideoFrameCallback(step); },
+      loop(); },
     switchTo, key(){ const n=nowMs(); if(n-lastKey>500){ lastKey=n; forceKey=true; } },   // at most 2 keyframes/s
     restarts:()=>restarts,
     stats(){ const em=encMs.length?encMs.reduce((a,b)=>a+b)/encMs.length:null, r={camera:`${FW}x${FH}`,label:track?short(track.label):"",

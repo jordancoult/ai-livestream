@@ -304,6 +304,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(restart(a)))
         if self.path == "/api/apply":
             return self._send(200, json.dumps(apply_look(a)))
+        if self.path == "/api/bypass":    # face pass bypass: JoyAI output goes straight out
+            return self._send(200, json.dumps(bridge_cmd({"facefix": not a.get("on")})))
         if self.path == "/api/reset":
             return self._send(200, json.dumps(bridge_cmd({"reset": True})))
         if self.path == "/api/save":
@@ -367,6 +369,7 @@ pre{margin:0;max-height:240px;overflow:auto;font:11px/1.45 ui-monospace,monospac
   <div style="min-width:0"><textarea id="prompt" rows="4" style="width:100%;resize:vertical;font:13px system-ui"></textarea>
    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center">
     <button id="apply" class="b2">Apply live</button><button id="reset" class="b2">Reset memory</button>
+    <button id="bypass" class="b3" title="Skip the face pass: the JoyAI output is sent out directly">Bypass face pass: off</button>
     <button id="revert" class="b3">Revert to preset</button><button id="save" class="b3">Save to preset</button>
     <span id="lookmsg" style="color:var(--dim)"></span></div>
    <div id="livenow" style="color:var(--dim);font-size:12px;margin-top:8px"></div></div>
@@ -413,6 +416,10 @@ $("file").onchange=e=>{const f=e.target.files[0]; if(!f)return; const rd=new Fil
 $("lib").onchange=e=>{ if(!e.target.value)return; look.ref=e.target.value; look.refName=e.target.value; showRef(); msg("photo picked — Apply live / Save to preset"); e.target.value=""; };
 $("apply").onclick=async()=>{ const r=await (await fetch("/api/apply",{method:"POST",body:JSON.stringify({prompt:$("prompt").value,ref:look.ref,ref_name:look.refName})})).json();
   msg(r.error||"applied live (JoyAI restarts its session: ~2 s, memory reset)", r.error?"var(--bad)":"var(--ok)"); };
+let bypassOn=false;
+$("bypass").onclick=async()=>{ const r=await (await fetch("/api/bypass",{method:"POST",body:JSON.stringify({on:!bypassOn})})).json();
+  if(r.error) msg(r.error,"var(--bad)"); else { bypassOn=!bypassOn; showBypass(); } };
+function showBypass(){ $("bypass").textContent="Bypass face pass: "+(bypassOn?"ON":"off"); $("bypass").style.background=bypassOn?"var(--bad)":""; }
 $("reset").onclick=async()=>{ const r=await (await fetch("/api/reset",{method:"POST",body:"{}"})).json(); msg(r.error||"memory reset", r.error?"var(--bad)":"var(--ok)"); };
 $("revert").onclick=()=>loadPreset($("ch").value,false);
 $("save").onclick=async()=>{ const r=await (await fetch("/api/save",{method:"POST",body:JSON.stringify({character:$("ch").value,prompt:$("prompt").value,ref:look.ref})})).json();
@@ -437,6 +444,7 @@ async function tick(){
   if(showPhone&&qrFor!==s.phone_url){ $("link").textContent=s.phone_url; $("qr").innerHTML="";
     if(window.QRCode) new QRCode($("qr"),{text:s.phone_url,width:96,height:96,correctLevel:QRCode.CorrectLevel.M}); qrFor=s.phone_url; }
   const ph_=s.phase||(s.running?["wait","starting"]:null); $("phase").textContent=ph_?ph_[1]:""; $("phase").className=ph_?ph_[0]:"";
+  if(s.bridge&&s.bridge.facefix_available){ bypassOn=!s.bridge.facefix_on; showBypass(); }
   const b=s.bridge, p=s.phone, sy=b&&b.sync||{}, lv=sy.levels||{}, fl=sy.flow||{}, vo=sy.voice||{}, mo=sy.monitor||{};
   const up=!!b; if(up!==dashUp){views(up); dashUp=up;}
   const r=(p&&p.rates)||{}, ph=(p&&p.phone)||{};

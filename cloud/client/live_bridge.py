@@ -864,7 +864,7 @@ async def main():
                     last_frame = time.time()
                     frame = crop_resize(frame, sess["w"], sess["h"])
                     views["input"] = frame
-                    if ff is not None:
+                    if ff is not None and sess["ff_on"]:        # face pass bypassed: no work for it at all
                         ff.add_input(seq + 1, frame)
                     if sess["review"] is not None or args.record_av_sbs:
                         sent_cache[seq + 1] = frame
@@ -931,7 +931,7 @@ async def main():
                     for fr in frames:
                         img = fr.to_ndarray(format="bgr24")
                         sseq = (meta or {}).get("source_seq")
-                        job = ff.submit(sseq, img) if ff is not None and sseq else None
+                        job = ff.submit(sseq, img) if ff is not None and sess["ff_on"] and sseq else None
                         queue.append((img, (meta or {}).get("t_capture_ms"), job, sseq))
                     while len(queue) > args.max_buffer:
                         old = queue.popleft()

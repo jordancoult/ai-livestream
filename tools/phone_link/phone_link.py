@@ -99,7 +99,8 @@ class Link:
 
     def video(self, m, jpeg=False):
         t_arr = time.time() * 1000
-        cap, seq, key = HDR.unpack_from(m, 1)
+        cap, seq, flags = HDR.unpack_from(m, 1)
+        key, rot = flags & 1, (flags >> 1) & 3
         data = m[1 + HDR.size:]
         self.kind = "jpeg" if jpeg else "h264"
         if self.last_seq is not None and seq > self.last_seq + 1:
@@ -113,6 +114,8 @@ class Link:
             else:
                 for fr in self.dec.decode(av.Packet(data)):
                     img = fr.to_ndarray(format="bgr24")
+                if img is not None and rot:   # the phone sends sensor-oriented frames: upright here (~0.5 ms)
+                    img = cv2.rotate(img, (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE)[rot - 1])
         except Exception:  # noqa: BLE001  (a missing keyframe after a reconnect: wait for the next one)
             img = None
         dms = (time.perf_counter() - t0) * 1000
@@ -286,7 +289,7 @@ pre{font:13px ui-monospace,monospace;white-space:pre-wrap}</style></head><body>
 const T="__TOKEN__", BR=__BITRATE__, $=id=>document.getElementById(id);
 const now=()=>performance.timeOrigin+performance.now();
 let ws, enc=null, seq=0, nEnc=0, nSent=0, encMs=[], kind="", fpsT=now();
-function hdr(tag,cap,sq,key){const b=new ArrayBuffer(14); const v=new DataView(b); v.setUint8(0,tag); v.setFloat64(1,cap,true); v.setUint32(9,sq,true); v.setUint8(13,key?1:0); return new Uint8Array(b);}
+function hdr(tag,cap,sq,key){const b=new ArrayBuffer(14); const v=new DataView(b); v.setUint8(0,tag); v.setFloat64(1,cap,true); v.setUint32(9,sq,true); v.setUint8(13,key===true?1:(key|0)); return new Uint8Array(b);}
 function send(tag,cap,sq,key,data){ if(!ws||ws.readyState!==1)return; if(ws.bufferedAmount>2e6) return; // link can't keep up: drop
   const h=hdr(tag,cap,sq,key), o=new Uint8Array(h.length+data.byteLength); o.set(h,0); o.set(new Uint8Array(data),h.length); ws.send(o); nSent++; }
 function connect(){ ws=new WebSocket(`wss://${location.host}/ws?t=${T}`); ws.binaryType="arraybuffer";
@@ -304,23 +307,24 @@ async function start(){ $("go").hidden=true; $("st").textContent="starting camer
      audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
   const v=$("me"); v.srcObject=s; await v.play().catch(()=>{}); if(!v.videoWidth) await new Promise(r=>v.onloadedmetadata=r);
   const st=s.getVideoTracks()[0].getSettings(); let W=v.videoWidth&~1, H=v.videoHeight&~1;
-  // the raw camera frames come in the sensor's (landscape) orientation; drawing the <video> into a canvas applies the
-  // rotation the phone displays, so the encoder gets upright portrait frames of the size it was configured for
-  const cvs=document.createElement("canvas"); cvs.width=W; cvs.height=H; const cg=cvs.getContext("2d");
+  // raw camera frames come in the sensor's orientation (landscape on a portrait phone): encode them as they are and
+  // let the laptop rotate (cheap there; a canvas redraw here costs time). rot = quarter turns clockwise to upright.
+  const probe=new VideoFrame(v,{timestamp:0}); const FW=probe.displayWidth&~1, FH=probe.displayHeight&~1; probe.close();
+  const ROT=((FW>FH)!==(W>H))?1:0;
   if("VideoEncoder" in window){
     kind="h264 (WebCodecs, hardware)";
-    const cfg={codec:"avc1.42E01F",width:W,height:H,bitrate:BR,framerate:30,latencyMode:"realtime",hardwareAcceleration:"prefer-hardware",avc:{format:"annexb"}};
+    const cfg={codec:"avc1.42E01F",width:FW,height:FH,bitrate:BR,framerate:30,latencyMode:"realtime",hardwareAcceleration:"prefer-hardware",avc:{format:"annexb"}};
     let sup=await VideoEncoder.isConfigSupported(cfg).catch(()=>({supported:false}));
     if(!sup.supported){cfg.codec="avc1.640028"; sup=await VideoEncoder.isConfigSupported(cfg).catch(()=>({supported:false}));}
     if(sup.supported){
       const caps=[];   // FIFO: a realtime H.264 encode (no B-frames) returns frames in order; timestamps of canvas
                        // frames don't survive exactly, so they can't be the key
       enc=new VideoEncoder({output:(chunk)=>{const c=caps.shift()||{}; encMs.push(now()-c.t0); if(encMs.length>60)encMs.shift();
-          const b=new ArrayBuffer(chunk.byteLength); chunk.copyTo(b); send(72,c.cap,c.sq,chunk.type==="key",b); nEnc++;},
+          const b=new ArrayBuffer(chunk.byteLength); chunk.copyTo(b); send(72,c.cap,c.sq,(chunk.type==="key"?1:0)|(ROT<<1),b); nEnc++;},
         error:e=>{$("st").textContent="encoder error: "+e.message;}});
       enc.configure(cfg);
       const step=(t,meta)=>{ if(enc.encodeQueueSize<2){ const cap=meta&&meta.captureTime?performance.timeOrigin+meta.captureTime:now();
-          const ts=Math.round(meta.mediaTime*1e6)||Math.round(t*1000); cg.drawImage(v,0,0,W,H); const f=new VideoFrame(cvs,{timestamp:ts}); const sq=++seq;
+          const ts=Math.round(meta.mediaTime*1e6)||Math.round(t*1000); const f=new VideoFrame(v,{timestamp:ts}); const sq=++seq;
           caps.push({cap,sq,t0:now()}); enc.encode(f,{keyFrame:sq%60===1}); f.close(); }
         v.requestVideoFrameCallback(step); };
       v.requestVideoFrameCallback(step);

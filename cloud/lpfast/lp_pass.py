@@ -214,8 +214,10 @@ class Face:
             center = np.linalg.solve(M[:, :2], np.array([128.0, 128.0]) - M[:, 2])
             c, s_ = np.cos(-ang), np.sin(-ang)
             rel = np.array([[c, -s_], [s_, c]]) @ (center - ce) / iod
-            self.crop_ref = {"rel": rel, "size": (256.0 / sc) / iod, "dth": th - ang}
-            self.ref_new = True          # Driver.analyze drops it again unless this frame is frontal
+            # calibrating: offer this frame as a candidate (Driver.analyze keeps it only if frontal) and use
+            # LivePortrait's own crop meanwhile; the reference = the median of 15 frontal candidates (one bad frame
+            # taken as THE reference warped every later frame until a reset: 2026-11-26)
+            self.cand = {"rel": rel, "size": (256.0 / sc) / iod, "dth": th - ang}
             return M
         r = self.crop_ref
         c, s_ = np.cos(ang), np.sin(ang)
@@ -310,6 +312,7 @@ class Driver:
         """Re-take the crop reference and the visibility baseline and re-detect the face (LPPass neutral reset /
         a new person / a stuck track)."""
         self.face.crop_ref = None
+        self.face.cands, self.face.cand = [], None
         self.face.lmk = None
         self.bad = 0
         if self.vis is not None:
@@ -321,10 +324,17 @@ class Driver:
             if lmk is None:
                 return None
             m = self.face.motion(bgr, lmk)
-            if getattr(self.face, "ref_new", False):    # neutral calibration only from a frontal face
-                self.face.ref_new = False
-                if abs(float(m["yaw"])) > 12 or abs(float(m["pitch"])) > 15:
-                    self.face.crop_ref = None
+            f = self.face
+            if f.crop_ref is None and getattr(f, "cand", None) is not None:   # calibrating (see Face._stable_crop)
+                if abs(float(m["yaw"])) <= 12 and abs(float(m["pitch"])) <= 15:
+                    f.cands = getattr(f, "cands", []) + [f.cand]
+                f.cand = None
+                if len(getattr(f, "cands", [])) >= 15:
+                    c = f.cands
+                    f.crop_ref = {"rel": np.median(np.stack([x["rel"] for x in c]), axis=0),
+                                  "size": float(np.median([x["size"] for x in c])),
+                                  "dth": float(np.median([x["dth"] for x in c]))}
+                    f.cands = []
             m["R"] = rot_matrix(m["pitch"], m["yaw"], m["roll"])
             self.face.stream.synchronize()
         el, er = lmk[[0, 12]].mean(0), lmk[[24, 36]].mean(0)

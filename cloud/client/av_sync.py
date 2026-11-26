@@ -82,6 +82,10 @@ class AudioMonitor:
         self.source, self.get_delay_ms, self.voice = source, get_delay_ms, voice
         self.stop = threading.Event()
         self.stats = {"delay_ms": None, "dropped": 0, "inserted": 0}
+        # meters for the console (tools/character_console.py): per-block RMS of the last ~0.3 s per stage
+        self.levels = {k: collections.deque(maxlen=30) for k in ("in", "voice", "out")}
+        self.flow = {"fed": 0, "got": 0, "buf": 0, "in_stage": 0, "stall_ms": 0}
+        self._stall_logged = 0.0
         self._adjusting = False
         self._smooth = None
         self._since_force = 999
@@ -124,10 +128,26 @@ class AudioMonitor:
             if voice_on and self.voice.failed:   # stage died: continue with the plain mic
                 voice_on = False
                 buf.clear()
+            self.levels["in"].append(_rms(b))
+            self.flow["fed"] += 1
             if voice_on:
                 self.voice.feed(b)
-                buf.extend(self.voice.drain())
+                got = self.voice.drain()
+                for g in got:
+                    self.levels["voice"].append(_rms(g))
+                self.flow["got"] += len(got)
+                buf.extend(got)
                 in_stage = self.voice.pending_blocks()
+                # a stage that falls behind (network stall to a remote GPU): its backlog is not delay we can drop
+                # here (nothing is queued yet), so count only a normal amount; the burst it sends when it catches up
+                # is then dropped as excess (the audio catches up) instead of everything being thrown away meanwhile
+                normal = self.voice.block_blocks * 2 + self.voice.delay_ms / 10
+                stall = max(0.0, in_stage - normal)
+                self.flow["stall_ms"] = round(stall * 10)
+                if stall > 30 and time.time() - self._stall_logged > 5:
+                    self._stall_logged = time.time()
+                    print(f"[av_sync] voice stage behind by {stall * 10:.0f} ms (stall: network / GPU)", flush=True)
+                in_stage = min(in_stage, normal)
             else:
                 buf.append(b)
                 in_stage = 0
@@ -146,10 +166,11 @@ class AudioMonitor:
             have = len(buf) + in_stage
             err = int(round(have - target_blocks))   # + = too much delay (drop), - = too little (insert)
             if err > JUMP_BLOCKS:                # first measurement or a big jump: snap at once
+                n0 = len(buf)
                 for _ in range(err):
                     if len(buf) > 1:
                         buf.popleft()
-                self.stats["dropped"] += err
+                self.stats["dropped"] += n0 - len(buf)
                 err = 0
             if not buf or err < -JUMP_BLOCKS:    # nothing to play yet, or far too little delay: silence
                 out = silence
@@ -186,6 +207,8 @@ class AudioMonitor:
                     self.stats["inserted"] += 1
                 else:
                     out = buf.popleft()
+            self.levels["out"].append(_rms(out))
+            self.flow["buf"], self.flow["in_stage"] = len(buf), round(in_stage)
             try:
                 if self.record is not None:
                     self.record.append((time.time(), out))
@@ -312,6 +335,9 @@ class AVSync:
         return {"pipeline_ms": None if p is None else round(p), "chain_ms": self.chain_ms,
                 "delay_ms": None if d is None else round(d),
                 "monitor": dict(self.monitor.stats) if self.monitor else None, "test": dict(self.test),
+                "levels": {k: round(20 * np.log10(max(1e-5, max(v) if v else 1e-5)), 1)
+                           for k, v in self.monitor.levels.items()} if self.monitor else None,
+                "flow": dict(self.monitor.flow) if self.monitor else None,
                 "voice": self.monitor.voice.stats() if self.monitor and self.monitor.voice else None}
 
     # A/V recording: what you see (played frames) + what you hear (the delayed, possibly converted audio)

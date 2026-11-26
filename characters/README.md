@@ -32,6 +32,11 @@ driver), and with the Nuance driver the phone's front camera goes to the persona
 Wear headphones (your converted voice plays back in sync; speakers would feed it into the mic). Run the
 dashboard's A/V sync test once per camera kind so the camera's own delay is compensated (saved per input kind).
 
+**Console** (this PC): `cloud/facefix/.venv/bin/python tools/character_console.py` -> http://127.0.0.1:8780. Start / stop a
+run (character, driver, length, pitch) and watch every stage live: the source as sent to JoyAI, JoyAI's output, the
+face pass (= played), the phone; per-stage rates, the JoyAI round trip and a latency breakdown; the audio path (phone
+mic -> bridge -> voice stage -> delay line -> phone) with level meters and backlogs; the run's log.
+
 ## A character folder: `characters/<name>/`
 | File / field | What | Where it is used |
 |---|---|---|

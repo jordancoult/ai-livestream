@@ -15,12 +15,14 @@ Started by tools/character_live.py --phone; standalone:
 import argparse
 import asyncio
 import http
+import json
 import secrets
 import socket
 import ssl
 import subprocess
 import threading
 import time
+import collections
 import urllib.request
 from pathlib import Path
 
@@ -68,11 +70,31 @@ class Hub:
         self.a, self.clients, self.loop = a, set(), None
         self.cam_out = set()   # local camera readers (asyncio StreamWriters)
         self.enc = None        # --drive-srt encoder (ffmpeg -> SRT -> the bridge)
+        # counters for the console (GET /stats): per second, over the last ~2 s
+        self.cnt = {k: 0 for k in ("cam_in", "mic_in", "video_out", "audio_out")}
+        self.rates, self.t_rate = {}, time.time()
+        self.mic_rms = collections.deque(maxlen=25)
+        self.phone = {}        # what the page reports (audio buffer, frames shown, output latency, sync offset)
         self.n_cam = 0
         self.mic = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1",
                                      "--latency-msec=20", "-d", a.mic_sink], stdin=subprocess.PIPE)
 
+    def tick(self):
+        now = time.time()
+        if now - self.t_rate >= 2:
+            dt = now - self.t_rate
+            self.rates = {k: round(v / dt, 1) for k, v in self.cnt.items()}
+            self.cnt = {k: 0 for k in self.cnt}
+            self.t_rate = now
+
+    def stats(self):
+        self.tick()
+        m = max(self.mic_rms) if self.mic_rms else 0
+        return {"clients": len(self.clients), "rates": self.rates,
+                "mic_db": round(20 * np.log10(max(1e-5, m)), 1), "phone": self.phone, "drive": bool(self.a.drive_srt)}
+
     def broadcast(self, data, video=False):
+        self.cnt["video_out" if video else "audio_out"] += 1
         for ws in list(self.clients):
             tr = ws.transport
             if video and tr is not None and tr.get_write_buffer_size() > 600_000:
@@ -138,8 +160,16 @@ class Hub:
                 if not isinstance(m, bytes) or not m:
                     continue
                 if m[:1] == b"M" and self.mic.poll() is None:
+                    self.cnt["mic_in"] += 1
+                    x = np.frombuffer(m[1:], np.int16).astype(np.float32) / 32768
+                    self.mic_rms.append(float(np.sqrt((x ** 2).mean())) if len(x) else 0.0)
                     self.mic.stdin.write(m[1:])
                     self.mic.stdin.flush()
+                elif m[:1] == b"S":
+                    try:
+                        self.phone = {**json.loads(m[1:].decode()), "t": time.time()}
+                    except ValueError:
+                        pass
                 elif m[:1] == b"C" and (self.cam_out or self.a.drive_srt):
                     self.camera_frame(m[1:])
         finally:
@@ -161,6 +191,7 @@ class Hub:
             self.enc = None
 
     def camera_frame(self, jpg):
+        self.cnt["cam_in"] += 1
         img = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             return
@@ -208,6 +239,10 @@ class Hub:
     def http(self, conn, req):
         if req.path.startswith("/ws"):
             return None  # WebSocket upgrade
+        if req.path.split("?")[0] == "/stats" and f"t={self.a.token}" in req.path:
+            body = json.dumps(self.stats()).encode()
+            return Response(http.HTTPStatus.OK, "OK", Headers([("Content-Type", "application/json"),
+                                                               ("Content-Length", str(len(body)))]), body)
         if req.path.split("?")[0] == "/" and f"t={self.a.token}" in req.path:
             body = (PAGE.replace("__TOKEN__", self.a.token).replace("__TITLE__", self.a.title)
                     .replace("__CAMERA__", "true" if self.a.camera_port or self.a.drive_srt else "false")
@@ -295,8 +330,13 @@ function connect(){
 }
 function show(){const now=performance.now(); let f=null;
   while(frames.length&&frames[0][0]<=now)f=frames.shift();
-  if(f){const u=URL.createObjectURL(f[1]); $("v").src=u; if(lastURL)URL.revokeObjectURL(lastURL); lastURL=u;}
+  if(f){shownN++; const u=URL.createObjectURL(f[1]); $("v").src=u; if(lastURL)URL.revokeObjectURL(lastURL); lastURL=u;}
   requestAnimationFrame(show);}
+let shownN=0;
+setInterval(()=>{ if(!ws||ws.readyState!==1||!ctx)return;
+  const st={buf_ms:Math.round(Math.max(0,playAt-ctx.currentTime)*1000), out_lat_ms:Math.round(outLat()*1000),
+            shown_fps:+(shownN/2).toFixed(1), queued:frames.length, offset_ms:userOff, sr:ctx.sampleRate};
+  shownN=0; ws.send(new TextEncoder().encode("S"+JSON.stringify(st)));},2000);
 setInterval(()=>{if(ws&&ws.readyState===1)$("st").textContent=`${(rx*8/1e6/2).toFixed(1)} Mbit/s · audio buffer ${Math.round(Math.max(0,playAt-ctx.currentTime)*1000)} ms`; rx=0;},2000);
 $("start").onclick=async()=>{
   if($("start").disabled)return; $("start").disabled=true; $("start").textContent="Starting…";

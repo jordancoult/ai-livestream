@@ -682,6 +682,7 @@ async def main():
     queue = collections.deque()          # (frame, t_capture_ms)
     stats = collections.Counter()
     lat = []
+    rt_lat = collections.deque(maxlen=250)    # JoyAI round trip per frame (console: where the latency is)
     from av_sync import AVSync
     if args.monitor_source == "airplay":
         args.monitor_source = "airplay_audio.monitor"
@@ -826,6 +827,9 @@ async def main():
                         continue
                     received += 1
                     recv_times.append(time.time())
+                    tc = (meta or {}).get("t_capture_ms")
+                    if tc:     # JoyAI round trip: the frame's arrival here -> its output back (network + GPU)
+                        rt_lat.append(time.time() * 1000 - tc)
                     if args.save_input:   # real server timing (source_seq, arrival) for tools/joyai_standin.py --timing
                         arrivals.append(((meta or {}).get("source_seq"), round(time.time(), 4)))
                     await ws.send(json.dumps({"type": "ack", "recv": received}))
@@ -851,6 +855,7 @@ async def main():
                       "buffer": args.buffer, "queue": len(queue), "played": stats["played"],
                       "repeated": stats["repeated"], "dropped": stats["dropped"], "server_fps": round(sfps, 1),
                       "g2g_ms": round(l[len(l) // 2]) if l else None,
+                      "joyai_rt_ms": round(sorted(rt_lat)[len(rt_lat) // 2]) if rt_lat else None,
                       "session": {k: start.get(k) for k in ("kv_reset_frames", "freeze_kv_on_static", "detection_mode")},
                       "facefix_available": ff is not None, "facefix_on": sess["ff_on"], "input_fps": src.fps(),
                       "input_live": src.live, "sync": sync.status()}

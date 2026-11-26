@@ -104,6 +104,11 @@ class VoiceStage:
         self.moved += len(got)
         return got
 
+    @property
+    def block_blocks(self):
+        """The stage's block size in 10 ms blocks (it returns audio in bursts of this size)."""
+        return (self.block or 4800) / 480
+
     def pending_blocks(self):
         """Delay inside the stage in 10 ms blocks: fed but not yet handed over (in the stage or ready) + its
         algorithmic delay."""

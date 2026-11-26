@@ -79,9 +79,12 @@ change survives the bf16 add (vs ~30% merged into bf16, ~7% merged into FP8).
 ## Recipe (what works)
 - **Reference:** a full-body character image on a plain background (`assets/char_front.png`). An upper-body
   crop turned G-Star into a realistic human torso.
-- **Prompt (rule since 2026-11-25, the user's call): JoyAI's own character-replacement preset for every character
-  swap: "Replace me with the character in the reference picture."** (`prompts/replace.txt`; `gstar.txt`, `karen.txt`,
-  `human_blonde.txt` hold the same). With the 1.1 weights it works well; the earlier finding (explicit descriptions
+- **Prompt (the user's call, 2026-11-26): every character swap in the character/lpfast pipeline uses
+  "Replace me with the character in the reference picture, with mouth closed and no expression."** (`prompts/replace.txt`;
+  `gstar.txt`, `karen.txt`, `human_blonde.txt` hold the same). JoyAI gives a neutral face and the lpfast face pass adds the
+  driver's expression (before, JoyAI copied the expression itself and the face pass looked like it did nothing). Before
+  2026-11-26: JoyAI's own preset "Replace me with the character in the reference picture." (rule since 2026-11-25;
+  `bench/bench_box.sh` keeps it so benchmarks stay comparable). With the 1.1 weights it works well; the earlier finding (explicit descriptions
   beat the generic prompt, `prompts/gstar_hatfix.txt`) was on the 1.0 weights. The built-in prompt enhancer (`use_pe`) made identity worse, so it's off.
 - **Checkpoint `1101_face++`** (released 2026-11-01) over `0811`: clearly better human identity and motion.
 - **Session options** (start message): `detection_mode: "off"`, `use_pe: false`, `kv_reset_frames: 0` (no drift

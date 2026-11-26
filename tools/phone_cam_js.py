@@ -34,7 +34,7 @@ function CamEngine(o){
     probe.close(); ROT=(r+rotUser)&3;
     if(enc&&enc.state!=="closed") enc.close();
     q=[]; enc=new VideoEncoder({output:ch=>{ const c=q.shift()||{}; encMs.push(nowMs()-(c.t0||nowMs())); if(encMs.length>60)encMs.shift();
-        const b=new Uint8Array(ch.byteLength); ch.copyTo(b); nEnc++; o.send(c.cap||nowMs(), c.sq||0, (ch.type==="key"?1:0)|(ROT<<1), b); },
+        const b=new Uint8Array(ch.byteLength); ch.copyTo(b); nEnc++; lastOut=nowMs(); o.send(c.cap||nowMs(), c.sq||0, (ch.type==="key"?1:0)|(ROT<<1), b); },
       error:e=>{ (o.onerror||console.error)("encoder: "+e.message); }});
     enc.configure({codec:"avc1.42E01F",width:FW,height:FH,bitrate:o.bitrate||4e6,framerate:30,latencyMode:"realtime",
                    hardwareAcceleration:"prefer-hardware",avc:{format:"annexb"}});
@@ -48,14 +48,19 @@ function CamEngine(o){
     track.onunmute=()=>{ forceKey=true; }; track.onended=()=>{ setTimeout(()=>ensure(),300); };
     v.style.transform=short(track.label)==="Front"?"scaleX(-1)":"none";   // preview mirrored only for the selfie camera
     await v.play().catch(()=>{}); await configure(); buttons(); zoomUI(); }
-  function step(t,meta){ if(enc&&enc.state==="configured"&&enc.encodeQueueSize<2){
+  function step(t,meta){ lastStep=nowMs(); if(enc&&enc.state==="configured"&&enc.encodeQueueSize<2){
       const cap=meta&&meta.captureTime?performance.timeOrigin+meta.captureTime:nowMs();
       try{ const f=new VideoFrame(v,{timestamp:Math.round((meta&&meta.mediaTime||t/1000)*1e6)});
         if((f.displayWidth&~1)!==FW||(f.displayHeight&~1)!==FH){ f.close(); configure(); }   // camera changed size
         else { sq++; q.push({cap,sq,t0:nowMs()}); enc.encode(f,{keyFrame:forceKey||sq%60===1}); forceKey=false; f.close(); }
       }catch(e){} }
     v.requestVideoFrameCallback(step); }
-  let busy=false;
+  let busy=false, lastOut=nowMs(), lastStep=nowMs(), restarts=0, lastKey=0;
+  // watchdog: iOS's hardware encoder can stall (queue stuck, no output, no error) -- seen 2026-11-26 after a burst of
+  // keyframe requests on bad Wi-Fi: the stream froze until a reload. Restart whatever stopped, within ~1.5 s.
+  setInterval(()=>{ if(busy||!track||document.visibilityState!=="visible") return; const now=nowMs();
+    if(now-lastStep>1500){ restarts++; lastStep=now; v.play().catch(()=>{}); v.requestVideoFrameCallback(step); }
+    else if(now-lastOut>1500&&enc){ restarts++; lastOut=now; if(restarts%3===0) ensure(); else configure(); } },500);
   async function ensure(){   // after the page comes back: camera, encoder and frame loop alive? else restart them
     if(busy) return; busy=true;
     try{ if(!track||track.readyState!=="live"||!enc||enc.state==="closed"){ await switchTo(cur); }
@@ -71,7 +76,8 @@ function CamEngine(o){
       devices.sort((a,b)=>rank(a)-rank(b)); buttons();
       const rb=document.getElementById("rot"); if(rb) rb.onclick=()=>{ rotUser=(rotUser+1)&3; configure(); };
       v.requestVideoFrameCallback(step); },
-    switchTo, key(){ forceKey=true; },
+    switchTo, key(){ const n=nowMs(); if(n-lastKey>500){ lastKey=n; forceKey=true; } },   // at most 2 keyframes/s
+    restarts:()=>restarts,
     stats(){ const em=encMs.length?encMs.reduce((a,b)=>a+b)/encMs.length:null, r={camera:`${FW}x${FH}`,label:track?short(track.label):"",
              enc_fps:nEnc, encode_ms:em==null?null:+em.toFixed(1), rot:ROT*90}; nEnc=0; return r; },
   };

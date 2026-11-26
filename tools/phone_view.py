@@ -573,7 +573,7 @@ function show(){const now=performance.now(); let f=null;
   requestAnimationFrame(show);}
 setInterval(()=>{ if(!started) return;
   const c=cam?cam.stats():{}; const st={buf_ms:ctx?Math.round(Math.max(0,playAt-ctx.currentTime)*1000):0, out_lat_ms:Math.round(outLat()*1000),
-    shown_fps:+(shownN/2).toFixed(1), queued:frames.length, up_queue:outq.length, up_kb:Math.round(outBytes/1024), flushes, offset_ms:userOff, sr:ctx?ctx.sampleRate:0, camera:c.label?`${c.label} ${c.camera}`:"", enc_fps:c.enc_fps!=null?+(c.enc_fps/2).toFixed(1):null};
+    shown_fps:+(shownN/2).toFixed(1), queued:frames.length, up_queue:outq.length, enc_restarts:cam?cam.restarts():0, up_kb:Math.round(outBytes/1024), flushes, offset_ms:userOff, sr:ctx?ctx.sampleRate:0, camera:c.label?`${c.label} ${c.camera}`:"", enc_fps:c.enc_fps!=null?+(c.enc_fps/2).toFixed(1):null};
   shownN=0; out(new TextEncoder().encode("S"+JSON.stringify(st)));
   $("st").textContent=(Date.now()-okT<2000?"connected":"reconnecting…")+` · ${(rx*8/1e6/2).toFixed(1)} Mbit/s`; rx=0; },2000);
 async function start(){ if(started) return; started=true;

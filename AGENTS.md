@@ -47,3 +47,5 @@ patches) · `cloud/docs/lessons.md` (hard-won rules).
 - Secrets live in `.secrets/` (gitignored): `runpod_ed25519` (SSH key for GPU machines), `hf_token`. Never print them.
 - Cloud spend: say the hourly price before creating anything; terminate machines when done; only touch resources you
   created.
+
+- Output to OBS / TikTok / video calls (virtual camera AI_Scope_Cam, phone_out sink, Character_Mic): `docs/obs.md`.

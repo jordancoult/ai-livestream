@@ -79,8 +79,13 @@ SELF = ("webcam", "phone", "srt", "phonecam")
 
 
 def sink(name):
-    return subprocess.check_output(["pactl", "load-module", "module-null-sink", f"sink_name={name}",
-                                    f"sink_properties=device.description={name}"]).decode().strip()
+    """A PulseAudio/PipeWire null sink, created once and kept (OBS captures "Monitor of phone_out": a sink that
+    vanished at every run's end left OBS without its audio source). Returns None: nothing to unload."""
+    if name in subprocess.run(["pactl", "list", "short", "sinks"], capture_output=True, text=True).stdout.split():
+        return None
+    subprocess.check_output(["pactl", "load-module", "module-null-sink", f"sink_name={name}",
+                             f"sink_properties=device.description={name}"])
+    return None
 
 
 def main():
@@ -107,6 +112,7 @@ def main():
                     "the voice that becomes the character's with a self driver)")
     ap.add_argument("--url", default="ws://127.0.0.1:18080/ws")
     ap.add_argument("--dashboard", type=int, default=8765)
+    ap.add_argument("--obs-device", default="/dev/video10", help="v4l2loopback virtual camera for OBS ('' = none)")
     ap.add_argument("--no-face-pass", action="store_true")
     ap.add_argument("--no-voice", action="store_true", help="plain persona voice (no conversion)")
     ap.add_argument("--bridge-args", default="", help="extra live_bridge.py flags")
@@ -128,7 +134,14 @@ def main():
     mods = [] if live_self else [sink("char_audio")]
     env = dict(os.environ)
     if a.phone:      # the character's voice -> phone_out (-> the phone); the phone's mic -> phone_mic
-        mods += [sink("phone_out"), sink("phone_mic")]
+        sink("phone_out"), sink("phone_mic")
+        # the character's voice as a microphone for video-call apps (Telegram, browsers): "karen_mic"... named
+        # character_mic so any character works; kept like the sinks
+        if "character_mic" not in subprocess.run(["pactl", "list", "short", "sources"], capture_output=True,
+                                                 text=True).stdout.split():
+            subprocess.run(["pactl", "load-module", "module-remap-source", "master=phone_out.monitor",
+                            "source_name=character_mic", "source_properties=device.description=Character_Mic"],
+                           capture_output=True)
         env["PULSE_SINK"] = "phone_out"
         a.mic = "phone_mic.monitor"
     elif a.test:
@@ -157,7 +170,9 @@ def main():
     bridge += ["--monitor-offset-ms", str(av_off)]
     if not a.no_face_pass:
         bridge += ["--facefix-preset", c["face_pass"]["lpfast_preset"]]
-    bridge += ["--output", str(tmp / "played.mp4")] if a.test else ["--output", "ffplay"]
+    # live: the ffplay window + the OBS virtual camera (v4l2loopback "AI_Scope_Cam", docs/obs.md) when present
+    out = "ffplay" + ("," + a.obs_device if a.obs_device and Path(a.obs_device).exists() else "")
+    bridge += ["--output", str(tmp / "played.mp4")] if a.test else ["--output", out]
     if a.phone or not a.test:
         bridge += ["--dashboard", str(a.dashboard)]
     if out:
@@ -257,8 +272,9 @@ def main():
                     p.wait(180)   # the bridge writes the --out recording at exit (~1 s per 2 s of video)
                 except subprocess.TimeoutExpired:
                     p.kill()
-        for m in mods:
-            subprocess.run(["pactl", "unload-module", m])
+        for m in mods:          # (sinks are kept now: sink() returns None)
+            if m:
+                subprocess.run(["pactl", "unload-module", m])
         txt = (tmp / "bridge.log").read_text(errors="replace")
         for line in txt.splitlines():
             if "A/V recording" in line or "RESULT" in line:

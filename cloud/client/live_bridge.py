@@ -87,7 +87,8 @@ p.add_argument("--synctest-auto", type=float, default=None, help="(testing) star
 p.add_argument("--no-camera-fix", action="store_true", help="don't lock the v4l2 camera's frame rate (by default the "
                "bridge sets exposure_dynamic_framerate=0 so a webcam keeps 30 fps in dim light instead of dropping to "
                "~15-17, which caps the whole pipeline's fps)")
-p.add_argument("--output", default="/dev/video10", help="v4l2loopback device, .mp4 file or 'ffplay' (a window)")
+p.add_argument("--output", default="/dev/video10", help="v4l2loopback device, .mp4 file or 'ffplay' (a window); "
+               "several comma-separated, e.g. ffplay,/dev/video10")
 p.add_argument("--out-size", default=None, help="output WxH after resize (default: generation size)")
 p.add_argument("--ref", default=None, help="reference image (file or http(s) URL); omit for a prompt-only edit")
 p.add_argument("--keep-download", action="store_true", help="keep URL downloads in cloud/client/.cache for reuse "
@@ -510,6 +511,25 @@ class Sink:
         self.p.wait()
 
 
+class MultiSink:
+    """Several outputs at once, e.g. --output ffplay,/dev/video10 (a window to watch + the OBS virtual camera)."""
+    def __init__(self, paths, w, h):
+        self.sinks = [Sink(p, w, h) for p in paths]
+
+    def write(self, frame):
+        for s in self.sinks:
+            s.write(frame)
+
+    def close(self):
+        for s in self.sinks:
+            s.close()
+
+
+def make_sink(path, w, h):
+    paths = [p for p in path.split(",") if p]
+    return Sink(paths[0], w, h) if len(paths) == 1 else MultiSink(paths, w, h)
+
+
 class FileWriter:
     """Background mp4 writer (review / saved input) so encoding never blocks playout."""
 
@@ -836,7 +856,7 @@ async def main():
             sess = {"w": w, "h": h, "dec": av.CodecContext.create("h264", "r"), "new_enc": False, "ff_on": ff is not None,
                     "ref_name": args.ref, "state": "running", "last_msg": ""}
             sess["enc"] = new_enc()
-            sess["sink"], sess["sink_wh"] = Sink(args.output, w, h), (w, h)
+            sess["sink"], sess["sink_wh"] = make_sink(args.output, w, h), (w, h)
             review = FileWriter(args.review, 3 * w, h, args.play_fps) if args.review else None
             sess["review"] = review
             recv_times = collections.deque(maxlen=200)
@@ -906,7 +926,7 @@ async def main():
                                 queue.clear()
                                 old = sess["sink"]
                                 sess["w"], sess["h"] = nw, nh
-                                sess["sink"], sess["sink_wh"] = Sink(args.output, nw, nh), (nw, nh)
+                                sess["sink"], sess["sink_wh"] = make_sink(args.output, nw, nh), (nw, nh)
                                 old.close()
                                 if sess["review"] is not None:   # the review file has a fixed size: stop it
                                     sess["review"].close()

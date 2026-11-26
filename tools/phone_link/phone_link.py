@@ -389,7 +389,7 @@ async function post(){ if(inflight||!outq.length) return; inflight=true;
   try{ const r=await fetch(`https://${location.hostname}:__HTTP_PORT__/up?t=${T}`,{method:"POST",body:b,headers:{"Content-Type":"text/plain"}});
     const a=new Uint8Array(await r.arrayBuffer()), v=new DataView(a.buffer); let j=0;
     while(j+4<=a.length){ const len=v.getUint32(j,true); onDown(new DataView(a.buffer,j+4,len)); j+=4+len; }
-    if(httpMode) sock("HTTP fallback — sending to the laptop (WebSocket unavailable)",true);
+    sock("connected — sending to the laptop (HTTPS)",true);
   }catch(e){ sock("HTTP fallback error: "+e.message); await new Promise(r=>setTimeout(r,500)); }
   inflight=false; if(outq.length) post(); }
 function onDown(d){ if(d.getUint8(0)===80){ // 'P' clock ping: echo with our clock, at once
@@ -406,15 +406,13 @@ function connect(){ nTry++; wsT0=Date.now(); sock(`connecting (try ${nTry})…`)
 function report(o){ out(new TextEncoder().encode("S"+JSON.stringify(o))); }
 function fail(where,e){ const m=`${where}: ${e&&e.name?e.name+": ":""}${e&&e.message||e}`; $("st").textContent="ERROR "+m; $("go").hidden=false; report({error:m}); }
 window.addEventListener("error",e=>fail("page",e.error||e.message)); window.addEventListener("unhandledrejection",e=>fail("page",e.reason));
-connect();   // the socket first: the laptop sees the phone (and any error) even before Start
+httpMode=true; post();   // HTTPS only (Safari's WebSocket hangs at times; HTTPS measured as fast: 23 vs 25 ms)
+setInterval(()=>{ if(!inflight) post(); },250);   // keep the link (and clock pings) alive before Start
 $("go").onclick=()=>start().then(()=>{try{localStorage.setItem("autostart","1")}catch(_){}}).catch(e=>fail("start",e));
 // resilience: a stuck socket is retried, and coming back to the tab (or reopening the page) restores everything
-setInterval(()=>{ if(ws&&ws.readyState===0&&Date.now()-wsT0>4000){ try{ws.close()}catch(_){} }
-  // no open WebSocket for 3 s: carry on over HTTPS (a keyframe first: the laptop's decoder starts fresh), keep retrying
-  if(!(ws&&ws.readyState===1)&&!httpMode&&Date.now()-wsT0>3000){ httpMode=true; if(cam) cam.key(); sock("switching to the HTTP fallback…"); post(); } },1000);
+
 function revive(){ if(document.visibilityState!=="visible") return;
-  if(!ws||ws.readyState>1) connect();
-  if(cam) cam.ensure(); wake(); }
+  post(); if(cam) cam.ensure(); wake(); }
 document.addEventListener("visibilitychange",revive); window.addEventListener("pageshow",revive); window.addEventListener("focus",revive);
 let wl=null; async function wake(){ try{ if(!wl||wl.released) wl=await navigator.wakeLock.request("screen"); }catch(_){} }
 try{ if(localStorage.getItem("autostart")) setTimeout(()=>{ if(!started) start().catch(()=>{ $("go").hidden=false; sock("tap Start (iOS wants a tap)"); }); },300); }catch(_){}

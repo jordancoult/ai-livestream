@@ -24,12 +24,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 PY = str(REPO / "cloud/facefix/.venv/bin/python")
 LOG = REPO / ".tmp" / "console" / "run.log"
+PIDF = LOG.with_name("run.json")     # the run survives a console restart: re-attached from here
 DASH = "http://127.0.0.1:8765"
 PORT = int(os.environ.get("CONSOLE_PORT", 8780))
 SSL_CTX = ssl.create_default_context()
 SSL_CTX.check_hostname, SSL_CTX.verify_mode = False, ssl.CERT_NONE
 
-run = {"proc": None, "args": None, "t0": None, "ended": None, "rc": None}
+run = {"proc": None, "pid": None, "args": None, "t0": None, "ended": None, "rc": None}
 lock = threading.Lock()
 
 
@@ -62,16 +63,59 @@ def phone_url():
         return None
 
 
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return Path(f"/proc/{pid}/cmdline").read_bytes().find(b"character_live.py") >= 0
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def adopt():
+    """A run started by an earlier console process (still going): attach to it by PID."""
+    try:
+        j = json.loads(PIDF.read_text())
+    except (OSError, ValueError):
+        return
+    if pid_alive(j["pid"]):
+        run.update(pid=j["pid"], args=j["args"], t0=j["t0"], proc=None, ended=None, rc=None)
+
+
+def is_alive():
+    p = run.get("proc")
+    if p is not None:
+        return p.poll() is None
+    return bool(run.get("pid")) and pid_alive(run["pid"])
+
+
 def state():
     p = run["proc"]
-    alive = p is not None and p.poll() is None
-    if p is not None and not alive and run["ended"] is None:
-        run["ended"], run["rc"] = time.time(), p.returncode
+    alive = is_alive()
+    if (p is not None or run.get("pid")) and not alive and run["ended"] is None:
+        run["ended"], run["rc"] = time.time(), (p.returncode if p is not None else None)
     url = phone_url() if alive else None
     st = {"running": alive, "args": run["args"], "t0": run["t0"], "ended": run["ended"], "rc": run["rc"],
           "characters": characters(), "phone_url": url, "log": log_tail()}
     if alive:
         st["bridge"] = get_json(DASH + "/status")
+        try:
+            txt = LOG.read_text(errors="replace")
+        except OSError:
+            txt = ""
+        drv = (run["args"] or {}).get("driver")
+        if "Traceback" in txt:
+            st["phase"] = ("bad", "error: see the log")
+        elif st["bridge"] and st["bridge"].get("played"):
+            st["phase"] = ("ok", "live")
+        elif st["bridge"]:
+            st["phase"] = ("wait", "connected: JoyAI is starting (first frames in a few seconds)")
+        elif "[phone] connected" in txt or (drv == "webcam" and "voice stage ready" in txt):
+            st["phase"] = ("wait", "your camera is coming in: opening the JoyAI session")
+        elif url:
+            st["phase"] = ("wait", "waiting for your phone: scan the QR code or open the link, then tap Start on the "
+                                   "phone" if drv != "webcam" else "waiting for the webcam")
+        else:
+            st["phase"] = ("wait", "starting (voice stage + face pass load in ~20 s)")
         if url:
             base, tok = url.split("/?t=")
             st["phone"] = get_json(f"{base}/stats?t={tok}")
@@ -80,7 +124,7 @@ def state():
 
 def start(a):
     with lock:
-        if run["proc"] is not None and run["proc"].poll() is None:
+        if is_alive():
             return {"error": "already running"}
         ch = a.get("character", "karen")
         if ch not in characters():
@@ -96,20 +140,25 @@ def start(a):
         run.update(proc=subprocess.Popen(cmd, cwd=REPO, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                          start_new_session=True),
                    args=a, t0=time.time(), ended=None, rc=None)
+        run["pid"] = run["proc"].pid
+        PIDF.write_text(json.dumps({"pid": run["pid"], "args": a, "t0": run["t0"]}))
         return {"ok": True}
 
 
 def stop():
-    p = run["proc"]
-    if p is None or p.poll() is not None:
+    if not is_alive():
         return {"ok": True}
-    p.send_signal(signal.SIGTERM)          # character_live cleans up (bridge, phone page, sinks)
+    pid, p = run["pid"], run["proc"]
+    os.kill(pid, signal.SIGTERM)           # character_live cleans up (bridge, phone page, sinks)
 
     def reaper():
-        try:
-            p.wait(90)
-        except subprocess.TimeoutExpired:
-            os.killpg(p.pid, signal.SIGKILL)
+        t_end = time.time() + 90
+        while time.time() < t_end and pid_alive(pid):
+            if p is not None:
+                p.poll()
+            time.sleep(0.5)
+        if pid_alive(pid):
+            os.killpg(pid, signal.SIGKILL)
     threading.Thread(target=reaper, daemon=True).start()
     return {"ok": True}
 
@@ -158,7 +207,10 @@ select,input{background:#0b0d10;color:var(--fg);border:1px solid var(--line);bor
 button{border:0;border-radius:5px;padding:6px 14px;font:600 13px system-ui;color:#fff;cursor:pointer}
 #start{background:var(--ok)} #stop{background:var(--bad)} button:disabled{opacity:.4;cursor:default}
 .pill{padding:3px 9px;border-radius:99px;font-size:12px;background:#222;color:var(--dim)} .pill.on{background:#123d2a;color:#7fe0b0}
-#link{font-family:ui-monospace,monospace;font-size:12px;color:var(--acc);user-select:all}
+#link{font:13px ui-monospace,monospace;color:var(--acc);user-select:all;word-break:break-all}
+#copy{background:var(--acc)} #phase{font-size:13px} #phase.wait{color:var(--warn)} #phase.ok{color:var(--ok)} #phase.bad{color:var(--bad)}
+#phonebox{display:flex;gap:16px;align-items:center;margin:12px 16px 0;padding:12px;background:var(--card);border:1px solid var(--line);border-radius:8px}
+#qr{background:#fff;padding:8px;border-radius:6px;line-height:0} #qr img,#qr canvas{width:150px;height:150px}
 main{padding:14px 16px;display:grid;gap:14px}
 .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;align-items:stretch}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;min-width:0;position:relative}
@@ -182,7 +234,10 @@ pre{margin:0;max-height:240px;overflow:auto;font:11px/1.45 ui-monospace,monospac
 <label>min <input id="min" type="number" value="30" min="1" max="120" style="width:58px"></label>
 <label>pitch <input id="pitch" placeholder="auto" style="width:52px"></label>
 <button id="start">Start</button><button id="stop" disabled>Stop</button>
-<span id="pill" class="pill">stopped</span><span id="link"></span></header>
+<span id="pill" class="pill">stopped</span><span id="phase"></span></header>
+<section id="phonebox" hidden><div id="qr"></div><div style="min-width:0"><div style="color:var(--dim);margin-bottom:4px">Open on your phone (same Wi-Fi) — or scan the code:</div>
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><code id="link"></code><button id="copy">Copy</button></div>
+<div style="color:var(--dim);margin-top:6px;font-size:12px">First time: the phone warns about the certificate — Show Details → visit this website. Then tap Start on the phone.</div></div></section>
 <main>
 <div class="row">
  <div class="card"><span class="step">1</span><h2>Source (as sent to JoyAI)</h2><img id="v_input" alt=""><div class="kv" id="k_in"></div></div>
@@ -194,7 +249,12 @@ pre{margin:0;max-height:240px;overflow:auto;font:11px/1.45 ui-monospace,monospac
 <div class="card"><h2>Audio path</h2><div class="row" id="audio"></div></div>
 <div class="card"><h2>Log</h2><pre id="log"></pre></div>
 </main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
+let qrFor=null;
+document.addEventListener("click",e=>{ if(e.target.id!=="copy")return; const u=$("link").textContent;
+  (navigator.clipboard?navigator.clipboard.writeText(u):Promise.reject()).then(()=>{e.target.textContent="Copied";setTimeout(()=>e.target.textContent="Copy",1500);})
+  .catch(()=>{const r=document.createRange(); r.selectNodeContents($("link")); const s=getSelection(); s.removeAllRanges(); s.addRange(r);});});
 const $=id=>document.getElementById(id); let wasRunning=null, dashUp=false;
 const fmt=(v,u="",d=0)=>v==null||Number.isNaN(v)?"–":(+v).toFixed(d)+u;
 function kv(el,rows){el.innerHTML=rows.map(([k,v,c])=>`<span>${k}</span><span class="${c||""}">${v}</span>`).join("");}
@@ -209,7 +269,10 @@ async function tick(){
   $("start").disabled=s.running; $("stop").disabled=!s.running;
   $("pill").textContent=s.running?`running ${Math.round((Date.now()/1000-s.t0)/60)} min · ${s.args.driver}`:(s.ended?`stopped (exit ${s.rc})`:"stopped");
   $("pill").className="pill"+(s.running?" on":"");
-  $("link").textContent=s.phone_url?("phone: "+s.phone_url):"";
+  const showPhone=!!(s.running&&s.phone_url); $("phonebox").hidden=!showPhone;
+  if(showPhone&&qrFor!==s.phone_url){ $("link").textContent=s.phone_url; $("qr").innerHTML="";
+    if(window.QRCode) new QRCode($("qr"),{text:s.phone_url,width:150,height:150,correctLevel:QRCode.CorrectLevel.M}); qrFor=s.phone_url; }
+  const ph_=s.phase||(s.running?["wait","starting"]:null); $("phase").textContent=ph_?ph_[1]:""; $("phase").className=ph_?ph_[0]:"";
   const b=s.bridge, p=s.phone, sy=b&&b.sync||{}, lv=sy.levels||{}, fl=sy.flow||{}, vo=sy.voice||{}, mo=sy.monitor||{};
   const up=!!b; if(up!==dashUp){views(up); dashUp=up;}
   const r=(p&&p.rates)||{}, ph=(p&&p.phone)||{};
@@ -242,14 +305,15 @@ setInterval(tick,1000); tick();
 
 
 def main():
+    adopt()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     print(f"[console] http://127.0.0.1:{PORT}", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
-        stop()
+        pass
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, lambda *_: (stop(), sys.exit(0)))
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # a run outlives the console (Stop button stops it)
     main()

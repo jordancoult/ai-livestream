@@ -124,6 +124,7 @@ class Hub:
         self.link_ms = collections.deque(maxlen=150)   # phone capture -> here (ms)
         # phone mic capture -> here (ms): the bridge subtracts it from the voice delay (lip sync follows the uplink)
         self.mic_lag = collections.deque(maxlen=250)
+        self.mic_t0, self.mic_w, self.mic_backlog_ms = None, 0, None
         self.want_key = False
         self.down = collections.deque()     # HTTPS transport: what goes to the phone in the next response
         self.http_last = self.http_ping = 0.0
@@ -131,6 +132,30 @@ class Hub:
         self.n_cam = 0
         self.mic = subprocess.Popen(["pacat", "--raw", "--format=s16le", f"--rate={SR}", "--channels=1",
                                      "--latency-msec=20", "-d", a.mic_sink], stdin=subprocess.PIPE)
+
+    def mic_governor(self, pcm):
+        """Keep the mic buffer in front of the phone_mic device at ~40 ms. The phone's audio clock runs ~1.3 % fast
+        against the laptop's: written 1.013x real time, played 1.000x, the surplus piled up in pacat's buffer
+        without limit (+13 ms/s: ~330 ms after 25 s; found 2026-11-26 with tools/av_probe.py) -- delay the
+        timestamps could not see. Backlog = written - elapsed real time; surplus -> a slight time squeeze (<= 3 %,
+        inaudible), a burst (> 250 ms) -> dropped, an underrun -> re-anchor."""
+        now = time.time()
+        if self.mic_t0 is None:
+            self.mic_t0, self.mic_w = now, 0
+        backlog = self.mic_w / SR - (now - self.mic_t0)
+        if backlog < -0.05:                       # underrun (the phone paused): start counting again
+            self.mic_t0, self.mic_w, backlog = now, 0, 0.0
+        self.mic_backlog_ms = round(backlog * 1000)
+        excess = backlog - 0.04
+        if excess > 0.25:
+            self.cnt["mic_dropped"] = self.cnt.get("mic_dropped", 0) + 1
+            return None
+        if excess > 0:
+            ratio = 1.0 - min(0.03, 0.005 + excess * 0.1)
+            n = max(1, int(round(len(pcm) * ratio)))
+            pcm = np.interp(np.linspace(0, len(pcm) - 1, n), np.arange(len(pcm)), pcm.astype(np.float32)).astype(np.int16)
+        self.mic_w += len(pcm)
+        return pcm
 
     def tick(self):
         now = time.time()
@@ -157,7 +182,7 @@ class Hub:
                  "gap_max_ms": round(g[-1] * 1000)} if len(g) > 20 else None
         lk = sorted(self.link_ms)
         link = {"p50": round(lk[len(lk) // 2]), "p90": round(lk[int(len(lk) * 0.9)]), "max": round(lk[-1])} if len(lk) > 20 else None
-        return {"clients": len(self.clients) + (1 if self.http_active() else 0), "rates": self.rates, "cam_arrival": burst, "link_ms": link, "mic_lag_ms": getattr(self, "mic_lag_ms", None),
+        return {"clients": len(self.clients) + (1 if self.http_active() else 0), "rates": self.rates, "cam_arrival": burst, "link_ms": link, "mic_lag_ms": getattr(self, "mic_lag_ms", None), "mic_backlog_ms": self.mic_backlog_ms,
                 "mic_db": round(20 * np.log10(max(1e-5, m)), 1), "phone": self.phone, "drive": bool(self.a.drive_srt)}
 
     def broadcast(self, data, video=False):
@@ -262,8 +287,10 @@ class Hub:
                     self.cnt["mic_in"] += 1
                     x = np.frombuffer(m[1:], np.int16).astype(np.float32) / 32768
                     self.mic_rms.append(float(np.sqrt((x ** 2).mean())) if len(x) else 0.0)
-                    self.mic.stdin.write(m[1:])
-                    self.mic.stdin.flush()
+                    out = self.mic_governor(np.frombuffer(m[1:], np.int16))
+                    if out is not None:
+                        self.mic.stdin.write(out.tobytes())
+                        self.mic.stdin.flush()
                 elif m[:1] == b"S":
                     try:
                         self.phone = {**json.loads(m[1:].decode()), "t": time.time()}
@@ -549,6 +576,7 @@ cancels echo, but speakers can still leak into the mic).</p></div>
 __CAM_JS__
 const T="__TOKEN__", CAM=__CAMERA__, DRIVE=__DRIVE__, H264=__H264__, HP=__HTTP_PORT__, $=id=>document.getElementById(id);
 const nowMs=()=>performance.timeOrigin+performance.now();
+var micLate=[], micMode='';
 var ctx=null, micOn=true, playAt=0, frames=[], lastURL=null, rx=0, lag=0.15, userOff=0, cam=null, started=false, okT=0, shownN=0;
 try{localStorage.removeItem("avoff");}catch(e){}   // sync starts at 0 on every load (not remembered)
 function outLat(){return ctx?(ctx.outputLatency||0)+(ctx.baseLatency||0):0;}
@@ -593,7 +621,7 @@ function show(){const now=performance.now(); let f=null;
   requestAnimationFrame(show);}
 setInterval(()=>{ if(!started) return;
   const c=cam?cam.stats():{}; const st={buf_ms:ctx?Math.round(Math.max(0,playAt-ctx.currentTime)*1000):0, out_lat_ms:Math.round(outLat()*1000),
-    shown_fps:+(shownN/2).toFixed(1), queued:frames.length, up_queue:outq.length, enc_restarts:cam?cam.restarts():0, up_kb:Math.round(outBytes/1024), flushes, offset_ms:userOff, sr:ctx?ctx.sampleRate:0, camera:c.label?`${c.label} ${c.camera}`:"", enc_fps:c.enc_fps!=null?+(c.enc_fps/2).toFixed(1):null};
+    shown_fps:+(shownN/2).toFixed(1), queued:frames.length, up_queue:outq.length, mic_mode:micMode, mic_cb_late_ms:micLate.length?Math.round(micLate.slice().sort((a,b)=>a-b)[micLate.length>>1]):null, enc_restarts:cam?cam.restarts():0, up_kb:Math.round(outBytes/1024), flushes, offset_ms:userOff, sr:ctx?ctx.sampleRate:0, camera:c.label?`${c.label} ${c.camera}`:"", enc_fps:c.enc_fps!=null?+(c.enc_fps/2).toFixed(1):null};
   shownN=0; out(new TextEncoder().encode("S"+JSON.stringify(st)));
   $("st").textContent=(Date.now()-okT<2000?"connected":"reconnecting…")+` · ${(rx*8/1e6/2).toFixed(1)} Mbit/s`; rx=0; },2000);
 async function start(){ if(started) return; started=true;
@@ -619,13 +647,40 @@ async function start(){ if(started) return; started=true;
         cv.toBlob(async b=>{busy=false; if(!b)return; const d=new Uint8Array(await b.arrayBuffer()), o=new Uint8Array(d.length+1); o[0]=67; o.set(d,1); out(o);},"image/jpeg",0.7); },66);
     }
     const ms=await navigator.mediaDevices.getUserMedia({audio:ac});
-    const src=ctx.createMediaStreamSource(ms), proc=ctx.createScriptProcessor(1024,1,1), r=48000/ctx.sampleRate;
-    proc.onaudioprocess=e=>{ const x=e.inputBuffer.getChannelData(0), n=Math.floor(x.length*r), o=new Int16Array(n);
+    // Mic capture on the AUDIO THREAD (AudioWorklet, 128-sample quanta). The old ScriptProcessor delivered the mic
+    // ~400 ms after the sound on iOS (physical flash/beep probe, tools/av_probe.py, 2026-11-26): real delay AND
+    // timestamps that claimed old audio was fresh, so the voice played ~300 ms after the lips. Each chunk carries
+    // the capture time of its first sample on the phone clock (the video's), mapped from the audio clock.
+    const src=ctx.createMediaStreamSource(ms), r=48000/ctx.sampleRate, z=ctx.createGain(); z.gain.value=0; z.connect(ctx.destination);
+    function sendMic(x, ctxT, cbMs){            // x: Float32 at ctx.sampleRate, ctxT: context time of x[0]
+      const n=Math.floor(x.length*r), o=new Int16Array(n);
       for(let i=0;i<n;i++){const v=micOn?x[Math.min(x.length-1,Math.floor(i/r))]:0; o[i]=Math.max(-1,Math.min(1,v))*32767;}
-      // capture time of the chunk's first sample (phone clock, same as the video's): the laptop measures the mic's lag
-      const cap=nowMs()-x.length/ctx.sampleRate*1000-(ctx.baseLatency||0)*1000;
-      const m=new Uint8Array(9+o.byteLength); m[0]=109; new DataView(m.buffer).setFloat64(1,cap,true); m.set(new Uint8Array(o.buffer),9); out(m);};
-    const z=ctx.createGain(); z.gain.value=0; src.connect(proc); proc.connect(z); z.connect(ctx.destination);
+      let cap=cbMs;
+      try{ const ts=ctx.getOutputTimestamp&&ctx.getOutputTimestamp();
+        if(ts&&ts.performanceTime>0&&ctxT!=null) cap=performance.timeOrigin+ts.performanceTime+(ctxT-ts.contextTime)*1000; }catch(_){}
+      micLate.push(cbMs-cap); if(micLate.length>50) micLate.shift();
+      const m=new Uint8Array(9+o.byteLength); m[0]=109; new DataView(m.buffer).setFloat64(1,cap,true); m.set(new Uint8Array(o.buffer),9); out(m); }
+    let worklet=false;
+    if(ctx.audioWorklet&&window.AudioWorkletNode){
+      try{
+        const code=`class M extends AudioWorkletProcessor{constructor(){super();this.b=[];this.n=0;}
+          process(i){const x=i[0]&&i[0][0]; if(x){ if(!this.n) this.t=currentTime; this.b.push(x.slice()); this.n+=x.length;
+            if(this.n>=1024){ const o=new Float32Array(this.n); let k=0; for(const a of this.b){o.set(a,k);k+=a.length;}
+              this.port.postMessage({t:this.t,d:o},[o.buffer]); this.b=[]; this.n=0; } } return true; } }
+          registerProcessor("mic",M);`;
+        await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code],{type:"application/javascript"})));
+        const node=new AudioWorkletNode(ctx,"mic",{numberOfInputs:1,numberOfOutputs:1,channelCount:1});
+        node.port.onmessage=({data})=>sendMic(data.d, data.t, nowMs()-data.d.length/ctx.sampleRate*1000);
+        src.connect(node); node.connect(z); worklet=true;
+      }catch(err){ console.log("audioWorklet failed, using ScriptProcessor: "+err); }
+    }
+    if(!worklet){                                // fallback (older browsers)
+      const proc=ctx.createScriptProcessor(1024,1,1);
+      proc.onaudioprocess=e=>{ const x=e.inputBuffer.getChannelData(0), dur=x.length/ctx.sampleRate;
+        sendMic(x, e.playbackTime>0?e.playbackTime-2*dur:null, nowMs()-dur*1000); };
+      src.connect(proc); proc.connect(z);
+    }
+    micMode=worklet?"worklet":"scriptprocessor";
   }catch(e){ started=false; $("start").disabled=false; $("start").textContent="Start talking to __TITLE__"; alert("Camera/microphone: "+(e.message||e)); return; }
   $("go").hidden=true; $("ui").hidden=false; requestAnimationFrame(show); wake();
   try{localStorage.setItem("autostart","1")}catch(_){}

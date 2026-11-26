@@ -86,6 +86,8 @@ def main():
     ap.add_argument("--camera", default="/dev/video0", help="--driver webcam: v4l2 device")
     ap.add_argument("--srt-port", type=int, default=9000, help="--driver phone/srt: port the phone stream arrives on")
     ap.add_argument("--pitch", type=int, default=None, help="voice pitch override (semitones)")
+    ap.add_argument("--ref", default=None, help="this run: another reference photo (default: the character's)")
+    ap.add_argument("--prompt", default=None, help="this run: another JoyAI prompt (default: the character's)")
     ap.add_argument("--phone", action="store_true", help="watch/hear/talk from a phone browser on the same Wi-Fi "
                     "(its mic replaces --mic; the character's voice plays there instead of the laptop)")
     ap.add_argument("--phone-port", type=int, default=8443)
@@ -135,8 +137,8 @@ def main():
     else:
         inp, mon = f"srt://0.0.0.0:{PORT}", "char_audio.monitor"
     bridge = [PY, str(REPO / "cloud/client/live_bridge.py"), "--url", a.url, "--input", inp,
-              "--portrait", "--ref", str(REPO / c["appearance"]["reference"]),
-              "--prompt", (REPO / c["appearance"]["prompt_file"]).read_text().strip(),
+              "--portrait", "--ref", a.ref or str(REPO / c["appearance"]["reference"]),
+              "--prompt", a.prompt or (REPO / c["appearance"]["prompt_file"]).read_text().strip(),
               "--audio-monitor", "--monitor-source", mon,
               "--voice", "off" if a.no_voice else v["kind"], "--voice-model", str(REPO / v["model"]), "--voice-pitch", str(pitch),
               "--voice-index-rate", str(v["index_rate"]), "--voice-block-ms", str(v["block_ms"]),

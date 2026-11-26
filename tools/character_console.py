@@ -122,6 +122,90 @@ def state():
     return st
 
 
+def preset(name):
+    c = json.loads((REPO / "characters" / name / "character.json").read_text())
+    ap = c["appearance"]
+    return {"character": name, "prompt": (REPO / ap["prompt_file"]).read_text().strip(), "ref": ap["reference"],
+            "prompt_file": ap["prompt_file"], "lpfast_preset": c["face_pass"]["lpfast_preset"],
+            "voice": c["voice"].get("hf") or c["voice"]["model"]}
+
+
+def data_url_to_file(d, path):
+    """Decode an uploaded image (data URL) and save it as PNG."""
+    import base64
+    import cv2
+    import numpy as np
+    img = cv2.imdecode(np.frombuffer(base64.b64decode(d.split(",", 1)[1]), np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("not an image")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(path), img)
+    return path
+
+
+def bridge_cmd(cmd):
+    req = urllib.request.Request(DASH + "/cmd", json.dumps(cmd).encode(), {"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=3).read()
+        return {"ok": True}
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"bridge not reachable ({e.__class__.__name__}): is a run live?"}
+
+
+def apply_look(a):
+    """Prompt and/or reference photo, live (one JoyAI session restart, ~1-2 s, memory reset)."""
+    cmd = {}
+    if a.get("prompt"):
+        cmd["prompt"] = a["prompt"]
+    r = a.get("ref")
+    if r:
+        cmd["ref"] = r
+        if r.startswith("data:"):
+            cmd["ref_name"] = a.get("ref_name") or "upload"
+    return bridge_cmd(cmd) if cmd else {"error": "nothing to apply"}
+
+
+def save_look(a):
+    """Into the character's preset: prompt -> characters/<name>/prompt.txt (character.json points at it), photo ->
+    characters/<name>/reference.png (git keeps the previous version)."""
+    name = a.get("character")
+    if name not in characters():
+        return {"error": f"no character {name}"}
+    d = REPO / "characters" / name
+    cj = d / "character.json"
+    c = json.loads(cj.read_text())
+    saved = []
+    if a.get("prompt"):
+        (d / "prompt.txt").write_text(a["prompt"].strip() + "\n")
+        c["appearance"]["prompt_file"] = f"characters/{name}/prompt.txt"
+        saved.append("prompt")
+    r = a.get("ref")
+    if r and r != c["appearance"]["reference"]:
+        dst = d / "reference.png"
+        if r.startswith("data:"):
+            data_url_to_file(r, dst)
+        else:
+            import shutil
+            shutil.copyfile(REPO / r, dst)
+        c["appearance"]["reference"] = f"characters/{name}/reference.png"
+        saved.append("photo")
+    cj.write_text(json.dumps(c, indent=2) + "\n")
+    return {"ok": True, "saved": saved}
+
+
+def restart(a):
+    """Switch driver (or anything else fixed at start): stop, then start with the new settings."""
+    stop()
+
+    def later():
+        t_end = time.time() + 100
+        while time.time() < t_end and is_alive():
+            time.sleep(0.5)
+        start(a)
+    threading.Thread(target=later, daemon=True).start()
+    return {"ok": True}
+
+
 def start(a):
     with lock:
         if is_alive():
@@ -135,6 +219,13 @@ def start(a):
             cmd.append("--phone")
         if str(a.get("pitch", "")).strip():
             cmd += ["--pitch", str(int(a["pitch"]))]
+        pr = preset(ch)
+        if a.get("prompt") and a["prompt"].strip() != pr["prompt"]:
+            cmd += ["--prompt", a["prompt"].strip()]
+        r = a.get("ref")
+        if r and r != pr["ref"]:
+            p = data_url_to_file(r, LOG.with_name("ref_upload.png")) if r.startswith("data:") else REPO / r
+            cmd += ["--ref", str(p)]
         LOG.parent.mkdir(parents=True, exist_ok=True)
         f = open(LOG, "w")
         run.update(proc=subprocess.Popen(cmd, cwd=REPO, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -181,6 +272,21 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, PAGE, "text/html; charset=utf-8")
         if self.path.startswith("/api/state"):
             return self._send(200, json.dumps(state()))
+        if self.path.startswith("/api/preset?c="):
+            try:
+                return self._send(200, json.dumps(preset(self.path.split("=", 1)[1])))
+            except (OSError, KeyError, ValueError) as e:
+                return self._send(404, json.dumps({"error": str(e)}))
+        if self.path.startswith("/img?p="):    # previews: character photos and assets only
+            from urllib.parse import unquote
+            p = (REPO / unquote(self.path.split("=", 1)[1].split("&")[0])).resolve()
+            if (REPO / "characters" in p.parents or REPO / "assets" in p.parents) and p.is_file():
+                ct = {".png": "image/png", ".webp": "image/webp"}.get(p.suffix.lower(), "image/jpeg")
+                return self._send(200, p.read_bytes(), ct)
+        if self.path == "/api/assets":
+            imgs = sorted(str(p.relative_to(REPO)) for d in ("characters", "assets") for p in (REPO / d).rglob("*")
+                          if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp") and p.stat().st_size < 20e6)
+            return self._send(200, json.dumps(imgs))
         self._send(404, "{}")
 
     def do_POST(self):
@@ -193,6 +299,17 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(start(a)))
         if self.path == "/api/stop":
             return self._send(200, json.dumps(stop()))
+        if self.path == "/api/restart":
+            return self._send(200, json.dumps(restart(a)))
+        if self.path == "/api/apply":
+            return self._send(200, json.dumps(apply_look(a)))
+        if self.path == "/api/reset":
+            return self._send(200, json.dumps(bridge_cmd({"reset": True})))
+        if self.path == "/api/save":
+            try:
+                return self._send(200, json.dumps(save_look(a)))
+            except Exception as e:  # noqa: BLE001
+                return self._send(200, json.dumps({"error": str(e)}))
         self._send(404, "{}")
 
 
@@ -208,7 +325,8 @@ button{border:0;border-radius:5px;padding:6px 14px;font:600 13px system-ui;color
 #start{background:var(--ok)} #stop{background:var(--bad)} button:disabled{opacity:.4;cursor:default}
 .pill{padding:3px 9px;border-radius:99px;font-size:12px;background:#222;color:var(--dim)} .pill.on{background:#123d2a;color:#7fe0b0}
 #link{font:13px ui-monospace,monospace;color:var(--acc);user-select:all;word-break:break-all}
-#copy{background:var(--acc)} #phase{font-size:13px} #phase.wait{color:var(--warn)} #phase.ok{color:var(--ok)} #phase.bad{color:var(--bad)}
+#copy{background:var(--acc)} .b2{background:var(--acc)} .b3{background:#3a414c} #switch{background:var(--warn);color:#111}
+.btn2{display:block;text-align:center;background:#3a414c;border-radius:5px;padding:5px;cursor:pointer;font-weight:600;font-size:12px} #phase{font-size:13px} #phase.wait{color:var(--warn)} #phase.ok{color:var(--ok)} #phase.bad{color:var(--bad)}
 #phonebox{display:flex;gap:16px;align-items:center;margin:12px 16px 0;padding:12px;background:var(--card);border:1px solid var(--line);border-radius:8px}
 #qr{background:#fff;padding:8px;border-radius:6px;line-height:0} #qr img,#qr canvas{width:150px;height:150px}
 main{padding:14px 16px;display:grid;gap:14px}
@@ -233,12 +351,24 @@ pre{margin:0;max-height:240px;overflow:auto;font:11px/1.45 ui-monospace,monospac
 <select id="drv"><option value="phonecam">you: phone (camera + mic)</option><option value="webcam">you: laptop webcam + mic</option><option value="nuance">Nuance persona (credits)</option></select>
 <label>min <input id="min" type="number" value="30" min="1" max="120" style="width:58px"></label>
 <label>pitch <input id="pitch" placeholder="auto" style="width:52px"></label>
-<button id="start">Start</button><button id="stop" disabled>Stop</button>
+<button id="start">Start</button><button id="stop" disabled>Stop</button><button id="switch" hidden>Switch driver (restart)</button>
 <span id="pill" class="pill">stopped</span><span id="phase"></span></header>
 <section id="phonebox" hidden><div id="qr"></div><div style="min-width:0"><div style="color:var(--dim);margin-bottom:4px">Open on your phone (same Wi-Fi) — or scan the code:</div>
 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><code id="link"></code><button id="copy">Copy</button></div>
 <div style="color:var(--dim);margin-top:6px;font-size:12px">First time: the phone warns about the certificate — Show Details → visit this website. Then tap Start on the phone.</div></div></section>
 <main>
+<div class="card" id="look"><h2>Look — JoyAI reference photo + prompt</h2>
+ <div style="display:grid;grid-template-columns:150px 1fr;gap:14px;align-items:start">
+  <div><img id="refimg" alt="" style="width:150px;aspect-ratio:3/4;object-fit:cover;border-radius:6px;background:#000;display:block">
+   <label class="btn2" style="margin-top:6px">Upload photo…<input id="file" type="file" accept="image/*" hidden></label>
+   <select id="lib" style="width:150px;margin-top:6px"><option value="">…or pick from library</option></select></div>
+  <div style="min-width:0"><textarea id="prompt" rows="4" style="width:100%;resize:vertical;font:13px system-ui"></textarea>
+   <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center">
+    <button id="apply" class="b2">Apply live</button><button id="reset" class="b2">Reset memory</button>
+    <button id="revert" class="b3">Revert to preset</button><button id="save" class="b3">Save to preset</button>
+    <span id="lookmsg" style="color:var(--dim)"></span></div>
+   <div id="livenow" style="color:var(--dim);font-size:12px;margin-top:8px"></div></div>
+ </div></div>
 <div class="row">
  <div class="card"><span class="step">1</span><h2>Source (as sent to JoyAI)</h2><img id="v_input" alt=""><div class="kv" id="k_in"></div></div>
  <div class="card"><span class="step">2</span><h2>JoyAI output</h2><img id="v_joyai" alt=""><div class="kv" id="k_joy"></div></div>
@@ -261,11 +391,40 @@ function kv(el,rows){el.innerHTML=rows.map(([k,v,c])=>`<span>${k}</span><span cl
 function meter(db){return Math.max(0,Math.min(100,(db+60)/60*100));}
 function views(on){for(const k of ["input","joyai","final"]){const im=$("v_"+k); im.src=on?`http://127.0.0.1:8765/stream/${k}?fps=10&t=${Date.now()}`:"";}}
 async function post(p,b){await fetch(p,{method:"POST",body:JSON.stringify(b||{})});}
-$("start").onclick=()=>post("/api/start",{character:$("ch").value,driver:$("drv").value,minutes:$("min").value,pitch:$("pitch").value});
+// ---- look: the editors hold the photo + prompt; the preset is what the character folder has
+let look={ref:null, refName:null, prompt:""}, pre=null, running=false, runArgs=null;
+const startArgs=()=>({character:$("ch").value,driver:$("drv").value,minutes:$("min").value,pitch:$("pitch").value,prompt:$("prompt").value,ref:look.ref});
+$("start").onclick=()=>post("/api/start",startArgs());
+$("switch").onclick=()=>{post("/api/restart",startArgs()); $("switch").hidden=true; msg("restarting with the new driver…");};
+function msg(m,c){$("lookmsg").textContent=m; $("lookmsg").style.color=c||"var(--dim)";}
+function showRef(){ $("refimg").src=look.ref&&look.ref.startsWith("data:")?look.ref:(look.ref?"/img?p="+encodeURIComponent(look.ref):""); }
+function dirty(){ return pre && ($("prompt").value.trim()!==pre.prompt || look.ref!==pre.ref); }
+async function loadPreset(name, applyIfLive){
+  pre=await (await fetch("/api/preset?c="+encodeURIComponent(name))).json();
+  look={ref:pre.ref, refName:pre.ref, prompt:pre.prompt}; $("prompt").value=pre.prompt; showRef(); msg("");
+  if(applyIfLive&&running){ const r=await (await fetch("/api/apply",{method:"POST",body:JSON.stringify({prompt:pre.prompt,ref:pre.ref})})).json();
+    msg(r.error||(`${name}'s photo + prompt applied live`+(runArgs&&runArgs.character!==name?` — voice + face-pass preset change on restart`:"")), r.error?"var(--bad)":"var(--ok)"); }
+}
+$("ch").onchange=()=>loadPreset($("ch").value,true);
+$("file").onchange=e=>{const f=e.target.files[0]; if(!f)return; const rd=new FileReader();
+  rd.onload=()=>{look.ref=rd.result; look.refName=f.name; showRef(); msg(`photo "${f.name}" loaded — Apply live / Save to preset`);}; rd.readAsDataURL(f);};
+$("lib").onchange=e=>{ if(!e.target.value)return; look.ref=e.target.value; look.refName=e.target.value; showRef(); msg("photo picked — Apply live / Save to preset"); e.target.value=""; };
+$("apply").onclick=async()=>{ const r=await (await fetch("/api/apply",{method:"POST",body:JSON.stringify({prompt:$("prompt").value,ref:look.ref,ref_name:look.refName})})).json();
+  msg(r.error||"applied live (JoyAI restarts its session: ~2 s, memory reset)", r.error?"var(--bad)":"var(--ok)"); };
+$("reset").onclick=async()=>{ const r=await (await fetch("/api/reset",{method:"POST",body:"{}"})).json(); msg(r.error||"memory reset", r.error?"var(--bad)":"var(--ok)"); };
+$("revert").onclick=()=>loadPreset($("ch").value,false);
+$("save").onclick=async()=>{ const r=await (await fetch("/api/save",{method:"POST",body:JSON.stringify({character:$("ch").value,prompt:$("prompt").value,ref:look.ref})})).json();
+  if(r.error) return msg(r.error,"var(--bad)"); await loadPreset($("ch").value,false); msg(`saved to ${$("ch").value}'s preset: ${r.saved.join(" + ")||"nothing changed"}`,"var(--ok)"); };
+$("drv").onchange=()=>{ $("switch").hidden=!(running&&runArgs&&runArgs.driver!==$("drv").value); };
+fetch("/api/assets").then(r=>r.json()).then(l=>{$("lib").innerHTML+=l.map(p=>`<option value="${p}">${p.replace(/^(characters|assets)\//,"")}</option>`).join("");});
 $("stop").onclick=()=>post("/api/stop");
 async function tick(){
   let s; try{s=await (await fetch("/api/state")).json();}catch(e){return;}
-  if(!$("ch").options.length) $("ch").innerHTML=s.characters.map(c=>`<option>${c}</option>`).join("");
+  if(!$("ch").options.length){ $("ch").innerHTML=s.characters.map(c=>`<option>${c}</option>`).join("");
+    if(s.running&&s.args){ $("ch").value=s.args.character; $("drv").value=s.args.driver; } loadPreset($("ch").value,false); }
+  running=s.running; runArgs=s.args; $("switch").hidden=!(running&&runArgs&&runArgs.driver!==$("drv").value);
+  const bb=s.bridge; $("livenow").textContent=bb?`live now: photo ${String(bb.ref||"–").split("/").slice(-2).join("/")} · prompt "${(bb.prompt||"").slice(0,90)}${(bb.prompt||"").length>90?"…":""}"`:"(not live: Apply live works once a run is live; Start uses the photo + prompt above)";
+  if(dirty()&&!$("lookmsg").textContent) msg("unsaved changes","var(--warn)");
   $("start").disabled=s.running; $("stop").disabled=!s.running;
   $("pill").textContent=s.running?`running ${Math.round((Date.now()/1000-s.t0)/60)} min · ${s.args.driver}`:(s.ended?`stopped (exit ${s.rc})`:"stopped");
   $("pill").className="pill"+(s.running?" on":"");

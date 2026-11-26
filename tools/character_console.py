@@ -306,6 +306,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(apply_look(a)))
         if self.path == "/api/bypass":    # face pass bypass: JoyAI output goes straight out
             return self._send(200, json.dumps(bridge_cmd({"facefix": not a.get("on")})))
+        if self.path == "/api/avchain":
+            return self._send(200, json.dumps(bridge_cmd({"av_chain": float(a.get("ms", 0))})))
         if self.path == "/api/reset":
             return self._send(200, json.dumps(bridge_cmd({"reset": True})))
         if self.path == "/api/save":
@@ -379,6 +381,9 @@ pre{margin:0;max-height:240px;overflow:auto;font:11px/1.45 ui-monospace,monospac
  <div class="card"><span class="step">2</span><h2>JoyAI output</h2><img id="v_joyai" alt=""><div class="kv" id="k_joy"></div></div>
  <div class="card"><span class="step">3</span><h2>Face pass = played</h2><img id="v_final" alt=""><div class="kv" id="k_fin"></div></div>
  <div class="card"><span class="step">4</span><h2>Phone</h2><div class="kv" id="k_ph"></div>
+   <div style="margin-top:10px;display:flex;gap:8px;align-items:center" title="Shifts the character's voice against the picture (all outputs: window, OBS, phone). Lips move before you hear them = press −. Saved for this camera input.">
+    <b>Voice timing</b><button id="av_m" class="b3">−50 ms</button><span id="av_v" style="min-width:64px;text-align:center">–</span><button id="av_p" class="b3">+50 ms</button>
+    <span style="color:var(--dim);font-size:12px">voice late → −, early → +</span></div>
    <h2 style="margin-top:14px">Latency (video, capture → screen)</h2><div class="bar" id="lat"></div><div class="legend" id="latl"></div></div>
 </div>
 <div class="card"><h2>Audio path</h2><div class="row" id="audio"></div></div>
@@ -416,6 +421,10 @@ $("file").onchange=e=>{const f=e.target.files[0]; if(!f)return; const rd=new Fil
 $("lib").onchange=e=>{ if(!e.target.value)return; look.ref=e.target.value; look.refName=e.target.value; showRef(); msg("photo picked — Apply live / Save to preset"); e.target.value=""; };
 $("apply").onclick=async()=>{ const r=await (await fetch("/api/apply",{method:"POST",body:JSON.stringify({prompt:$("prompt").value,ref:look.ref,ref_name:look.refName})})).json();
   msg(r.error||"applied live (JoyAI restarts its session: ~2 s, memory reset)", r.error?"var(--bad)":"var(--ok)"); };
+let avChain=null;
+async function avStep(d){ if(avChain==null) return; const r=await (await fetch("/api/avchain",{method:"POST",body:JSON.stringify({ms:avChain+d})})).json();
+  if(r.error) msg(r.error,"var(--bad)"); else { avChain+=d; $("av_v").textContent=(avChain>0?"+":"")+avChain+" ms"; } }
+$("av_m").onclick=()=>avStep(-50); $("av_p").onclick=()=>avStep(50);
 let bypassOn=false;
 $("bypass").onclick=async()=>{ const r=await (await fetch("/api/bypass",{method:"POST",body:JSON.stringify({on:!bypassOn})})).json();
   if(r.error) msg(r.error,"var(--bad)"); else { bypassOn=!bypassOn; showBypass(); } };
@@ -444,6 +453,7 @@ async function tick(){
   if(showPhone&&qrFor!==s.phone_url){ $("link").textContent=s.phone_url; $("qr").innerHTML="";
     if(window.QRCode) new QRCode($("qr"),{text:s.phone_url,width:96,height:96,correctLevel:QRCode.CorrectLevel.M}); qrFor=s.phone_url; }
   const ph_=s.phase||(s.running?["wait","starting"]:null); $("phase").textContent=ph_?ph_[1]:""; $("phase").className=ph_?ph_[0]:"";
+  if(s.bridge&&s.bridge.sync&&s.bridge.sync.chain_ms!=null){ avChain=s.bridge.sync.chain_ms; $("av_v").textContent=(avChain>0?"+":"")+avChain+" ms"; }
   if(s.bridge&&s.bridge.facefix_available){ bypassOn=!s.bridge.facefix_on; showBypass(); }
   const b=s.bridge, p=s.phone, sy=b&&b.sync||{}, lv=sy.levels||{}, fl=sy.flow||{}, vo=sy.voice||{}, mo=sy.monitor||{};
   const up=!!b; if(up!==dashUp){views(up); dashUp=up;}

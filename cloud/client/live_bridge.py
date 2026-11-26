@@ -1019,6 +1019,11 @@ async def main():
                 if "synctest" in cmd:
                     sync.start_test()
                     return
+                if "av_chain" in cmd:   # voice timing (ms, - = earlier), live; saved for this input like a sync test
+                    from av_sync import save_chain
+                    sync.chain_ms = round(float(cmd["av_chain"]))
+                    save_chain(sync.kind, sync.chain_ms, sync.name, 1.0)
+                    return say(f"voice timing {sync.chain_ms:+d} ms (saved for this input)")
                 if "quit" in cmd:
                     quit_ev.set()
                     stop.set()

@@ -95,7 +95,8 @@ def state():
         run["ended"], run["rc"] = time.time(), (p.returncode if p is not None else None)
     url = phone_url() if alive else None
     st = {"running": alive, "args": run["args"], "t0": run["t0"], "ended": run["ended"], "rc": run["rc"],
-          "characters": characters(), "phone_url": url, "log": log_tail()}
+          "characters": characters(), "phone_url": url, "log": log_tail(),
+          "monitor_url": (REPO / ".tmp" / "monitor_url").read_text().strip() if (REPO / ".tmp" / "monitor_url").exists() else None}
     if alive:
         st["bridge"] = get_json(DASH + "/status")
         try:
@@ -352,7 +353,8 @@ pre{margin:0;max-height:240px;overflow:auto;font:11px/1.45 ui-monospace,monospac
 <label>min <input id="min" type="number" value="30" min="1" max="120" style="width:58px"></label>
 <label>pitch <input id="pitch" placeholder="auto" style="width:52px"></label>
 <button id="start">Start</button><button id="stop" disabled>Stop</button><button id="switch" hidden>Switch driver (restart)</button>
-<span id="pill" class="pill">stopped</span><span id="phase"></span></header>
+<span id="pill" class="pill">stopped</span><span id="phase"></span>
+<span id="mon" style="margin-left:auto;font-size:12px;color:var(--dim)"></span></header>
 <section id="phonebox" hidden><div id="qr"></div><div style="min-width:0"><div style="color:var(--dim);margin-bottom:4px">Open on your phone (same Wi-Fi) — or scan the code:</div>
 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><code id="link"></code><button id="copy">Copy</button></div>
 <div style="color:var(--dim);margin-top:6px;font-size:12px">First time: the phone warns about the certificate — Show Details → visit this website. Then tap Start on the phone.</div></div></section>
@@ -428,6 +430,9 @@ async function tick(){
   $("start").disabled=s.running; $("stop").disabled=!s.running;
   $("pill").textContent=s.running?`running ${Math.round((Date.now()/1000-s.t0)/60)} min · ${s.args.driver}`:(s.ended?`stopped (exit ${s.rc})`:"stopped");
   $("pill").className="pill"+(s.running?" on":"");
+  if(s.monitor_url&&!$("mon").dataset.u){ $("mon").dataset.u=s.monitor_url;
+    $("mon").innerHTML=`monitor (2nd phone, home Wi-Fi): <code style="color:var(--acc);user-select:all">${s.monitor_url}</code> <span id="qrm" style="display:inline-block;vertical-align:middle;background:#fff;padding:3px;border-radius:4px;line-height:0"></span>`;
+    if(window.QRCode) new QRCode($("qrm"),{text:s.monitor_url,width:64,height:64,correctLevel:QRCode.CorrectLevel.L}); }
   const showPhone=!!(s.running&&s.phone_url); $("phonebox").hidden=!showPhone;
   if(showPhone&&qrFor!==s.phone_url){ $("link").textContent=s.phone_url; $("qr").innerHTML="";
     if(window.QRCode) new QRCode($("qr"),{text:s.phone_url,width:96,height:96,correctLevel:QRCode.CorrectLevel.M}); qrFor=s.phone_url; }
@@ -464,8 +469,25 @@ setInterval(tick,1000); tick();
 </script></body></html>"""
 
 
+def ensure_monitor():
+    """The watch-only monitor (tools/monitor_view.py) for a second phone on the home Wi-Fi: its own low-priority
+    process, independent of runs (it survives them); started here if it isn't running."""
+    import socket
+    s = socket.socket(); s.settimeout(0.5)
+    try:
+        if s.connect_ex(("192.168.78.142" if False else "127.0.0.1", 0)) == 0:
+            pass
+    finally:
+        s.close()
+    if subprocess.run(["ss", "-tln", "sport", "= :8450"], capture_output=True, text=True).stdout.count("LISTEN"):
+        return
+    subprocess.Popen([PY, str(REPO / "tools/monitor_view.py")], cwd=REPO, stdout=open(LOG.with_name("monitor.log"), "w"),
+                     stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+
+
 def main():
     adopt()
+    ensure_monitor()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     print(f"[console] http://127.0.0.1:{PORT}", flush=True)
     try:

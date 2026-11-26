@@ -304,6 +304,9 @@ async function start(){ $("go").hidden=true; $("st").textContent="starting camer
      audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
   const v=$("me"); v.srcObject=s; await v.play().catch(()=>{}); if(!v.videoWidth) await new Promise(r=>v.onloadedmetadata=r);
   const st=s.getVideoTracks()[0].getSettings(); let W=v.videoWidth&~1, H=v.videoHeight&~1;
+  // the raw camera frames come in the sensor's (landscape) orientation; drawing the <video> into a canvas applies the
+  // rotation the phone displays, so the encoder gets upright portrait frames of the size it was configured for
+  const cvs=document.createElement("canvas"); cvs.width=W; cvs.height=H; const cg=cvs.getContext("2d");
   if("VideoEncoder" in window){
     kind="h264 (WebCodecs, hardware)";
     const cfg={codec:"avc1.42E01F",width:W,height:H,bitrate:BR,framerate:30,latencyMode:"realtime",hardwareAcceleration:"prefer-hardware",avc:{format:"annexb"}};
@@ -316,7 +319,7 @@ async function start(){ $("go").hidden=true; $("st").textContent="starting camer
         error:e=>{$("st").textContent="encoder error: "+e.message;}});
       enc.configure(cfg);
       const step=(t,meta)=>{ if(enc.encodeQueueSize<2){ const cap=meta&&meta.captureTime?performance.timeOrigin+meta.captureTime:now();
-          const ts=Math.round(meta.mediaTime*1e6)||Math.round(t*1000); const f=new VideoFrame(v,{timestamp:ts}); const sq=++seq;
+          const ts=Math.round(meta.mediaTime*1e6)||Math.round(t*1000); cg.drawImage(v,0,0,W,H); const f=new VideoFrame(cvs,{timestamp:ts}); const sq=++seq;
           caps.set(ts,{cap,sq,t0:now()}); enc.encode(f,{keyFrame:sq%60===1}); f.close(); }
         v.requestVideoFrameCallback(step); };
       v.requestVideoFrameCallback(step);
@@ -330,7 +333,7 @@ async function start(){ $("go").hidden=true; $("st").textContent="starting camer
   const ctx=new AudioContext(); await ctx.resume(); const src=ctx.createMediaStreamSource(s), pr=ctx.createScriptProcessor(1024,1,1), r=48000/ctx.sampleRate;
   pr.onaudioprocess=e=>{ if(!ws||ws.readyState!==1)return; const x=e.inputBuffer.getChannelData(0), n=Math.floor(x.length*r), o=new Int16Array(n);
     for(let i=0;i<n;i++)o[i]=Math.max(-1,Math.min(1,x[Math.min(x.length-1,Math.floor(i/r))]))*32767;
-    const cap=now()-1000*x.length/ctx.sampleRate, b=new ArrayBuffer(9+o.byteLength), dv=new DataView(b); dv.setUint8(0,65); dv.setFloat64(1,cap,true); new Int16Array(b,9).set(o); ws.send(b);};
+    const cap=now()-1000*x.length/ctx.sampleRate, b=new Uint8Array(9+o.byteLength), dv=new DataView(b.buffer); dv.setUint8(0,65); dv.setFloat64(1,cap,true); b.set(new Uint8Array(o.buffer),9); ws.send(b);};
   const z=ctx.createGain(); z.gain.value=0; src.connect(pr); pr.connect(z); z.connect(ctx.destination);
   setInterval(()=>{ const dt=(now()-fpsT)/1000; fpsT=now(); const em=encMs.length?encMs.reduce((a,b)=>a+b)/encMs.length:0;
     const rep={kind, camera:`${st.width}x${st.height} @ ${st.frameRate||"?"} fps`, enc_fps:+(nEnc/dt).toFixed(1), sent_fps:+(nSent/dt).toFixed(1), encode_ms:+em.toFixed(1), ws_buffer:ws?ws.bufferedAmount:0};
@@ -341,7 +344,7 @@ async function start(){ $("go").hidden=true; $("st").textContent="starting camer
 
 LAPTOP_PAGE = r"""<!doctype html><html><head><meta charset="utf-8"><title>Phone Link</title>
 <style>body{margin:0;background:#0e1013;color:#e6e8eb;font:14px system-ui;padding:16px} h1{font-size:16px;margin:0 0 10px}
-.wrap{display:flex;gap:16px;flex-wrap:wrap} img{height:70vh;background:#000;border-radius:6px} table{border-collapse:collapse}
+.wrap{display:flex;gap:16px;flex-wrap:wrap} img{height:70vh;max-width:100%;object-fit:contain;background:#000;border-radius:6px} table{border-collapse:collapse}
 td{padding:3px 10px;border-bottom:1px solid #2a2f37;font-variant-numeric:tabular-nums} td:first-child{color:#8b939e}
 .ok{color:#3fb27f}.warn{color:#e0a03a}.bad{color:#e05a4f} code{color:#5a9cf0;word-break:break-all}</style></head><body>
 <h1>Phone link test</h1>

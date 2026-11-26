@@ -328,7 +328,7 @@ button{border:0;border-radius:5px;padding:6px 14px;font:600 13px system-ui;color
 #copy{background:var(--acc)} .b2{background:var(--acc)} .b3{background:#3a414c} #switch{background:var(--warn);color:#111}
 .btn2{display:block;text-align:center;background:#3a414c;border-radius:5px;padding:5px;cursor:pointer;font-weight:600;font-size:12px} #phase{font-size:13px} #phase.wait{color:var(--warn)} #phase.ok{color:var(--ok)} #phase.bad{color:var(--bad)}
 #phonebox{display:flex;gap:16px;align-items:center;margin:12px 16px 0;padding:12px;background:var(--card);border:1px solid var(--line);border-radius:8px}
-#qr{background:#fff;padding:8px;border-radius:6px;line-height:0} #qr img,#qr canvas{width:150px;height:150px}
+#qr{background:#fff;padding:8px;border-radius:6px;line-height:0} #qr img,#qr canvas{width:96px;height:96px}
 main{padding:14px 16px;display:grid;gap:14px}
 .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;align-items:stretch}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;min-width:0;position:relative}
@@ -430,12 +430,13 @@ async function tick(){
   $("pill").className="pill"+(s.running?" on":"");
   const showPhone=!!(s.running&&s.phone_url); $("phonebox").hidden=!showPhone;
   if(showPhone&&qrFor!==s.phone_url){ $("link").textContent=s.phone_url; $("qr").innerHTML="";
-    if(window.QRCode) new QRCode($("qr"),{text:s.phone_url,width:150,height:150,correctLevel:QRCode.CorrectLevel.M}); qrFor=s.phone_url; }
+    if(window.QRCode) new QRCode($("qr"),{text:s.phone_url,width:96,height:96,correctLevel:QRCode.CorrectLevel.M}); qrFor=s.phone_url; }
   const ph_=s.phase||(s.running?["wait","starting"]:null); $("phase").textContent=ph_?ph_[1]:""; $("phase").className=ph_?ph_[0]:"";
   const b=s.bridge, p=s.phone, sy=b&&b.sync||{}, lv=sy.levels||{}, fl=sy.flow||{}, vo=sy.voice||{}, mo=sy.monitor||{};
   const up=!!b; if(up!==dashUp){views(up); dashUp=up;}
   const r=(p&&p.rates)||{}, ph=(p&&p.phone)||{};
-  kv($("k_in"),[["phone camera → laptop",fmt(r.cam_in," fps",1)],["bridge input",fmt(b&&b.input_fps," fps",1)],["sending to JoyAI",fmt(b&&b.fps," fps")]]);
+  kv($("k_in"),[["phone camera → laptop",fmt(r.cam_in," fps",1)],["bridge input",fmt(b&&b.input_fps," fps",1)],["sending to JoyAI",fmt(b&&b.send_fps," fps",1),b&&b.send_fps<20?"warn":""],
+    ["dropped as stale (>120 ms)",b?b.input_stale:"–"],["camera arrival gaps p50/p90/max",p&&p.cam_arrival?`${p.cam_arrival.gap_p50_ms}/${p.cam_arrival.gap_p90_ms}/${p.cam_arrival.gap_max_ms} ms`:"–"]]);
   kv($("k_joy"),[["round trip",fmt(b&&b.joyai_rt_ms," ms"),b&&b.joyai_rt_ms>900?"warn":""],["JoyAI output",fmt(b&&b.server_fps," fps",1)],["playout queue",b?`${b.queue} / buffer ${b.buffer}`:"–"],["dropped / repeated",b?`${b.dropped} / ${b.repeated}`:"–"]]);
   const hit=b&&b.facefix_hit?b.facefix_hit.split("/"):null, hr=hit?hit[0]/hit[1]*100:null;
   kv($("k_fin"),[["face pass render",fmt(b&&b.facefix_ms," ms")],["refined",fmt(hr,"%",1),hr!=null&&hr<97?"warn":""],["played",b?b.played:"–"],["glass to glass",fmt(b&&b.g2g_ms," ms")]]);

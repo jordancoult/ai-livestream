@@ -392,8 +392,8 @@ td{padding:3px 10px;border-bottom:1px solid #2a2f37;font-variant-numeric:tabular
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 const urls=__URLS__; document.getElementById("urls").innerHTML=urls.map(([n,u])=>`<div>${n}: <code>${u}</code></div>`).join("");
-if(window.QRCode&&urls.length) new QRCode(document.getElementById("qr"),{text:urls[0][1],width:170,height:170,correctLevel:QRCode.CorrectLevel.M});
-if(window.QRCode&&urls.length) new QRCode(document.getElementById("qrca"),{text:urls[0][1].replace(/\/[^\/]+$/,"/ca.crt"),width:150,height:150,correctLevel:QRCode.CorrectLevel.M});
+if(window.QRCode&&urls.length) new QRCode(document.getElementById("qr"),{text:urls[0][1],width:96,height:96,correctLevel:QRCode.CorrectLevel.M});
+if(window.QRCode&&urls.length) new QRCode(document.getElementById("qrca"),{text:urls[0][1].replace(/\/[^\/]+$/,"/ca.crt"),width:96,height:96,correctLevel:QRCode.CorrectLevel.M});
 const c=(v,good,ok)=>v==null?"":(v<=good?"ok":v<=ok?"warn":"bad");
 async function tick(){ const s=await (await fetch("/stats")).json(), p=s.phone||{}, L=s.latency_ms, G=s.gap_ms, A=s.audio_latency_ms;
  const rows=[["connected",s.connected],["stream",s.kind||"–"],["phone camera",p.camera||"–"],

@@ -562,7 +562,7 @@ function onDown(b){ const k=b[0], d=new DataView(b.buffer,b.byteOffset,b.byteLen
   if(k===65&&ctx){ // 'A' the character's voice: s16le 48 kHz mono, scheduled with a small jitter buffer
     const s=new Int16Array(b.slice(1).buffer), buf=ctx.createBuffer(1,s.length,48000), dd=buf.getChannelData(0);
     for(let i=0;i<s.length;i++)dd[i]=s[i]/32768;
-    const now=ctx.currentTime, l=lag+Math.max(0,-userOff/1000); if(playAt<now+0.04||playAt>now+0.6+l)playAt=now+l;
+    const now=ctx.currentTime, l=lag+Math.max(0,-userOff/1000); if(playAt<now+0.04||playAt>now+0.2+l)playAt=now+l;   // never let the voice buffer grow past lag+0.2 s
     const nd=ctx.createBufferSource(); nd.buffer=buf; nd.connect(ctx.destination); nd.start(playAt); playAt+=buf.duration; return; }
   if(k===86){ // 'V' JPEG: shown when its audio is heard, so picture and voice stay together
     frames.push([performance.now()+Math.max(0,ctx?(playAt-ctx.currentTime):0)*1000+outLat()*1000+Math.max(0,userOff), new Blob([b.subarray(1)],{type:"image/jpeg"})]);

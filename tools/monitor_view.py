@@ -119,6 +119,10 @@ class Monitor:
                     vid = path.split("v=")[1].split("&")[0] if "v=" in path else "x"
                     v = self.viewers.setdefault(vid, {"q": collections.deque(), "t": time.time()})
                     v["t"] = time.time()
+                    if "d=" in path and time.time() - v.get("logged", 0) > 5:
+                        v["logged"] = time.time()
+                        import urllib.parse
+                        print(f"[monitor] viewer {vid}: {urllib.parse.unquote(path.split('d=')[1].split('&')[0])}", flush=True)
                     msgs = []
                     while v["q"]:
                         msgs.append(v["q"].popleft())
@@ -177,14 +181,15 @@ PAGE = r"""<!doctype html><html><head><meta charset="utf-8">
  display:flex;gap:10px;align-items:center;background:linear-gradient(transparent,#000c);font-size:13px}
 #st{flex:1;text-align:right;opacity:.8} button{font:600 15px -apple-system;border:0;border-radius:20px;padding:9px 16px;background:#2e7d32;color:#fff}
 #go{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000}</style></head><body>
-<img id="v" alt=""><div id="go"><button id="start">Watch (with sound)</button></div>
+<img id="v" alt="" onload="D.img_ok++" onerror="D.img_err++"><div id="go"><button id="start">Watch (with sound)</button></div>
+<button id="snd" hidden style="position:fixed;top:calc(12px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);background:#c62828">Tap for sound</button>
 <div id="bar" hidden><button id="mute">Sound on</button><span id="st"></span></div>
 <script>
 const T="__TOKEN__", VID=Math.random().toString(36).slice(2), $=id=>document.getElementById(id);
 let ctx=null, playAt=0, frames=[], lastURL=null, muted=false, rx=0, live=false, okT=0, inflight=false;
-const LAG=0.25;
+const LAG=0.3; let D={img_ok:0,img_err:0,v:0,a:0,resets:0,ctx:""};
 async function poll(){ if(inflight) return; inflight=true;
-  try{ const r=await fetch(`/poll?t=${T}&v=${VID}`,{method:"POST",cache:"no-store"}); const a=new Uint8Array(await r.arrayBuffer());
+  try{ const r=await fetch(`/poll?t=${T}&v=${VID}&d=${encodeURIComponent(JSON.stringify({...D,ctx:ctx?ctx.state:"none",q:frames.length,buf:ctx?Math.round((playAt-ctx.currentTime)*1000):0}))}`,{method:"POST",cache:"no-store"}); const a=new Uint8Array(await r.arrayBuffer());
     okT=Date.now(); rx+=a.length; const dv=new DataView(a.buffer); let j=0;
     while(j+4<=a.length){ const n=dv.getUint32(j,true); onMsg(a.subarray(j+4,j+4+n)); j+=4+n; }
   }catch(e){ await new Promise(r=>setTimeout(r,500)); }
@@ -193,16 +198,23 @@ setInterval(poll,30);
 function onMsg(b){ const k=b[0];
   if(k===65&&ctx){ const s=new Int16Array(b.slice(1).buffer), buf=ctx.createBuffer(1,s.length,48000), d=buf.getChannelData(0);
     for(let i=0;i<s.length;i++)d[i]=muted?0:s[i]/32768;
-    const now=ctx.currentTime; if(playAt<now+0.04||playAt>now+0.8)playAt=now+LAG;
+    D.a++; const now=ctx.currentTime; if(playAt<now+0.04||playAt>now+0.6){ playAt=now+LAG; D.resets++; }
     const n=ctx.createBufferSource(); n.buffer=buf; n.connect(ctx.destination); n.start(playAt); playAt+=buf.duration; }
-  else if(k===86){ const wait=ctx?Math.max(0,playAt-ctx.currentTime)+(ctx.outputLatency||0)+(ctx.baseLatency||0):0;
+  else if(k===86){ D.v++; const wait=ctx&&ctx.state==="running"?Math.max(0,playAt-ctx.currentTime)+(ctx.outputLatency||0)+(ctx.baseLatency||0):0;
     frames.push([performance.now()+wait*1000, new Blob([b.subarray(1)],{type:"image/jpeg"})]); if(frames.length>40)frames.shift(); }
   else if(k===83){ try{ live=JSON.parse(new TextDecoder().decode(b.subarray(1))).live; }catch(_){} } }
 function show(){ const now=performance.now(); let f=null; while(frames.length&&frames[0][0]<=now)f=frames.shift();
   if(f){ const u=URL.createObjectURL(f[1]); $("v").src=u; if(lastURL)URL.revokeObjectURL(lastURL); lastURL=u; }
   requestAnimationFrame(show); }
 setInterval(()=>{ $("st").textContent=(Date.now()-okT>2000?"reconnecting…":(live?"live":"waiting for the stream"))+` · ${(rx*8/1e6/2).toFixed(1)} Mbit/s`; rx=0; },2000);
-$("start").onclick=async()=>{ ctx=new (window.AudioContext||window.webkitAudioContext)(); ctx.resume().catch(()=>{});
+function unlock(){ if(!ctx) return; ctx.resume().catch(()=>{});
+  // a silent buffer played inside the tap is what actually unlocks Web Audio on iOS
+  try{ const b=ctx.createBuffer(1,1,48000), n=ctx.createBufferSource(); n.buffer=b; n.connect(ctx.destination); n.start(0); }catch(_){} }
+document.addEventListener("touchend",unlock,{passive:true}); document.addEventListener("click",unlock);
+setInterval(()=>{ if(ctx) $("snd").hidden=ctx.state==="running"; },500);
+$("snd").onclick=unlock;
+$("start").onclick=async()=>{ try{ if(navigator.audioSession) navigator.audioSession.type="playback"; }catch(_){}   // ignore the silent switch (iOS 17+)
+  ctx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000}); unlock();
   $("go").hidden=true; $("bar").hidden=false; requestAnimationFrame(show); try{ await navigator.wakeLock.request("screen"); }catch(_){} };
 $("mute").onclick=()=>{ muted=!muted; $("mute").textContent=muted?"Sound off":"Sound on"; if(ctx) ctx.resume().catch(()=>{}); };
 document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible"&&ctx) ctx.resume().catch(()=>{}); });

@@ -96,7 +96,8 @@ p.add_argument("--prompt", required=True)
 p.add_argument("--portrait", action="store_true", help="480x840 (9:16) instead of 840x480")
 p.add_argument("--fps", type=float, default=26, help="camera send rate (JoyAI on an RTX 5090 outputs ~25-26 fps; "
                "frames above that are dropped by the server anyway)")
-p.add_argument("--play-fps", type=float, default=25, help="playout rate (set near the server's output fps)")
+p.add_argument("--play-fps", type=float, default=None, help="playout rate (default: = --fps; playing slower than "
+               "JoyAI outputs fills the playout queue: 25 vs 26 fps held ~10 frames = +0.4 s)")
 p.add_argument("--buffer", type=int, default=6, help="frames queued before playout starts; also the queue target")
 p.add_argument("--max-buffer", type=int, default=20, help="drop oldest frames above this queue length")
 p.add_argument("--seconds", type=float, default=0, help="stop after N seconds (0 = run until Ctrl+C)")
@@ -143,6 +144,8 @@ p.add_argument("--no-reconnect", action="store_true", help="exit when the server
 p.add_argument("--save-input", default=None, help="write the frames as sent (generation size) to this mp4 and "
                "<name>.json with source_seq per played frame (for client/mouth_sync.py)")
 args = p.parse_args()
+if args.play_fps is None:
+    args.play_fps = args.fps
 # (--face-driver audio: Ditto runs in its own process; its motion is ready ~0.47 s after capture (p90 0.57), before the
 # JoyAI frame arrives, so the normal playout buffer is enough: tested 2026-11-23, 99.7 % animated frames)
 if args.facefix_preset:  # a preset implies its mode
@@ -447,9 +450,11 @@ class Sink:
         vf = f"scale={ow}:{oh}:flags=lanczos" if (ow, oh) != (w, h) else "null"
         if path == "ffplay":
             self.p = subprocess.Popen(["ffplay", "-loglevel", "error", "-f", "rawvideo", "-pixel_format", "bgr24",
-                                       "-video_size", f"{w}x{h}", "-framerate", str(args.play_fps), "-fflags",
+                                       # 120: never pace the input (it then backs up into the pipe); show at once
+                                       "-video_size", f"{w}x{h}", "-framerate", "120", "-fflags",
                                        "nobuffer", "-flags", "low_delay", "-window_title", "ai-livestream", "-autoexit",
                                        "-vf", vf, "-i", "-"], stdin=subprocess.PIPE)
+            self._start_writer(live=True)
             return
         if path.startswith("/dev/video"):
             out = ["-vf", vf + ",format=yuv420p", "-f", "v4l2", path]
@@ -459,17 +464,48 @@ class Sink:
         self.p = subprocess.Popen(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
                                    "-s", f"{w}x{h}", "-r", str(args.play_fps), "-i", "-", *out],
                                   stdin=subprocess.PIPE)
+        self._start_writer(live=path.startswith("/dev/video"))
+
+    def _start_writer(self, live):
+        """Writes happen on their own thread: a blocking pipe write on the event loop stalled the whole bridge (the
+        ffplay pipe sat full, the loop waited on every frame: 16 fps sent to JoyAI, 2026-11-26). Live outputs (ffplay
+        window, v4l2) keep only the newest frame -- a slow viewer drops frames, never delays the pipeline; files keep
+        every frame (bounded queue)."""
+        self.live, self.q, self.cv, self.closed = live, collections.deque(maxlen=1 if live else 120), threading.Condition(), False
+        self.dropped = 0
+        threading.Thread(target=self._writer, daemon=True).start()
+
+    def _writer(self):
+        while True:
+            with self.cv:
+                self.cv.wait_for(lambda: self.q or self.closed)
+                if not self.q:
+                    return
+                f = self.q.popleft()
+            try:
+                self.p.stdin.write(f)
+            except (BrokenPipeError, ValueError, OSError):   # window closed
+                return
 
     def write(self, frame):
-        try:
-            self.p.stdin.write(frame.tobytes())
-        except BrokenPipeError:            # ffplay window closed
-            pass
+        with self.cv:
+            if self.live and self.q:
+                self.dropped += 1
+            self.q.append(frame.tobytes())
+            self.cv.notify()
 
     def close(self):
+        with self.cv:
+            self.closed = True
+            self.cv.notify()
+        if not self.live:
+            for _ in range(600):
+                if not self.q:
+                    break
+                time.sleep(0.01)
         try:
             self.p.stdin.close()
-        except BrokenPipeError:
+        except (BrokenPipeError, OSError):
             pass
         self.p.wait()
 

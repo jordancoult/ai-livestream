@@ -155,7 +155,7 @@
       "brow2": 0.0,
       "rest": 1.0
     },
-    "note": "Karen (assets/karen-interviewer.png) driven by a Nuance persona; tuned offline 2026-11-25 with cloud/lpfast/sweep_preset.py vs the girl preset: mouth size 1.74x -> 1.08x the driver's (no grimace), mouth corr 0.95 -> 0.97, vertical gaze spread 0.26 -> 0.06 (eyes no longer roll; eye gain >1 caused it). Limits/gates/smoothing = girl's | 2026-11-26: gate_hold 25 (a closed driver gate holds the last good expression ~1 s instead of fading to the raw JoyAI face: the on/off flicker on head turns in a phone session)",
+    "note": "Karen (assets/karen-interviewer.png) driven by a Nuance persona; tuned offline 2026-11-25 with cloud/lpfast/sweep_preset.py vs the girl preset: mouth size 1.74x -> 1.08x the driver's (no grimace), mouth corr 0.95 -> 0.97, vertical gaze spread 0.26 -> 0.06 (eyes no longer roll; eye gain >1 caused it). Limits/gates/smoothing = girl's | 2026-11-26: gate_hold 25 (a closed driver gate holds the last good expression ~1 s instead of fading to the raw JoyAI face: the on/off flicker on head turns in a phone session) | 2026-11-26: drv_yaw/src_yaw gates 25-40 -> 38-55 deg (phone off to the side: the driver sat at ~22-35 deg yaw and the face pass kept passing JoyAI through; live check 20/20 engaged at -30..-49)",
     "limits": {
       "lip": [
         0.14,
@@ -184,8 +184,8 @@
     },
     "gates": {
       "drv_yaw": [
-        25.0,
-        40.0
+        38.0,
+        55.0
       ],
       "drv_pitch": [
         18.0,
@@ -202,8 +202,8 @@
       "visibility": true,
       "cover_hold": 6,
       "src_yaw": [
-        30.0,
-        45.0
+        38.0,
+        55.0
       ],
       "src_pitch": [
         20.0,

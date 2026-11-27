@@ -315,16 +315,23 @@ class AudioMonitor:
 
 # ---------------------------------------------------------------- camera chain store
 
-def load_chain():
-    """{input kind: {"ms": video arrives this much after its sound, ...}} from the sync tests."""
-    try:
-        return json.loads(CHAIN_FILE.read_text())
-    except (OSError, ValueError):
-        return {}
+DEFAULT_CHAIN_FILE = REPO / "config" / "av_calibration.json"   # versioned defaults (local measurements override)
+
+
+def load_chain(local_only=False):
+    """{input kind: {"ms": video arrives this much after its sound, ...}}: the versioned defaults
+    (config/av_calibration.json) overridden by this machine's measurements (.tmp/av_chain.json)."""
+    d = {}
+    for p in (() if local_only else (DEFAULT_CHAIN_FILE,)) + (CHAIN_FILE,):
+        try:
+            d.update({k: v for k, v in json.loads(p.read_text()).items() if not k.startswith("_")})
+        except (OSError, ValueError):
+            pass
+    return d
 
 
 def save_chain(kind, ms, source, score):
-    d = load_chain()
+    d = load_chain(local_only=True)
     d[kind] = {"ms": round(ms), "source": source, "score": round(score, 3), "measured": time.strftime("%Y-%m-%d %H:%M:%S")}
     TMP.mkdir(exist_ok=True)
     CHAIN_FILE.write_text(json.dumps(d))

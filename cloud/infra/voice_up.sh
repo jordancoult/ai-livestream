@@ -12,4 +12,6 @@ P 'mkdir -p /workspace/rvc/tools/rvc_live /workspace/rvc/bin /workspace/rvc/mode
 bash cloud/infra/pod.sh put bin/uv /workspace/rvc/bin/
 bash cloud/infra/pod.sh put tools/rvc_live/setup.sh tools/rvc_live/serve.py tools/rvc_live/rvc_engine.py tools/rvc_live/get_voice.py /workspace/rvc/tools/rvc_live/
 bash cloud/infra/pod.sh put characters/* /workspace/rvc/characters/
+P 'mkdir -p /workspace/rvc/voices'
+bash cloud/infra/pod.sh put voices/catalog.json /workspace/rvc/voices/
 P 'cd /workspace/rvc && bash tools/rvc_live/setup.sh > setup.log 2>&1; tail -1 setup.log; HF_TOKEN=$(cat /root/.cache/huggingface/token 2>/dev/null) tools/rvc_live/.venv/bin/python tools/rvc_live/get_voice.py --all' 900

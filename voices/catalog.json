@@ -1,5 +1,5 @@
 {
-  "_doc": "Voices you can switch to live (console 'Voice' dropdown; live_bridge.py command voice_select). kind: rvc (trained model, like Karen) | seedvc (zero-shot from a short clip) | none (your own voice, in sync). Only one voice server runs on the GPU box at a time; switching unloads the old one (output muted ~10-25 s meanwhile). gain: output dB (the Seed-VC voices are ~18 dB hotter than Karen's RVC at the bridge default -6).",
+  "_doc": "Voices you can switch to live (console 'Voice' dropdown; live_bridge.py command voice_select). kind: rvc (trained model, like Karen) | seedvc (zero-shot from a short clip) | none (your own voice, in sync). Only one voice server runs on the GPU box at a time; switching unloads the old one (output muted ~10-25 s meanwhile). All voices are RVC now (girl/guy: own models, Karen's recipe, VCTK CC BY 4.0 - credit VCTK where the voices are used); Seed-VC remains for characters that only have a short clip (voice.kind seedvc). hf: the model's folder in the private artifacts repo (tools/rvc_live/get_voice.py --all).",
   "off": {
     "label": "Off (your own voice)",
     "kind": "none"
@@ -13,20 +13,33 @@
     "index_rate": 0.5,
     "block_ms": 200,
     "protect": 0.33,
-    "rms_mix": 0.25
+    "rms_mix": 0.25,
+    "hf": "voices/karen/v3"
   },
   "girl": {
-    "label": "Generic girl (Seed-VC; RVC model to come)",
-    "kind": "seedvc",
-    "reference_clip": "voices/girl/voice.wav",
-    "source": "CMU ARCTIC speaker slt (US English female), 7 sentences; free for any purpose incl. commercial (voices/girl/COPYING)",
-    "gain": -24.0
+    "label": "Generic girl (RVC)",
+    "kind": "rvc",
+    "pitch": 0,
+    "index_rate": 0.5,
+    "block_ms": 200,
+    "protect": 0.33,
+    "rms_mix": 0.25,
+    "model": "models/rvc/girl/girl.pth",
+    "pitch_self": 5,
+    "hf": "voices/girl/v1",
+    "source": "trained on VCTK speaker p300 (American female), CC BY 4.0 - attribution required: 'Voice model trained on the CSTR VCTK Corpus (University of Edinburgh), CC BY 4.0'; models/rvc/girl/README.txt"
   },
   "guy": {
-    "label": "Generic guy (Seed-VC; RVC model to come)",
-    "kind": "seedvc",
-    "reference_clip": "voices/guy/voice.wav",
-    "source": "CMU ARCTIC speaker bdl (US English male), 7 sentences; free for any purpose incl. commercial (voices/guy/COPYING)",
-    "gain": -24.0
+    "label": "Generic guy (RVC)",
+    "kind": "rvc",
+    "pitch": 0,
+    "index_rate": 0.5,
+    "block_ms": 200,
+    "protect": 0.33,
+    "rms_mix": 0.25,
+    "model": "models/rvc/guy/guy.pth",
+    "pitch_self": 0,
+    "hf": "voices/guy/v1",
+    "source": "trained on VCTK speaker p345 (American male), CC BY 4.0 - attribution required: 'Voice model trained on the CSTR VCTK Corpus (University of Edinburgh), CC BY 4.0'; models/rvc/guy/README.txt"
   }
 }

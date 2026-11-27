@@ -71,8 +71,11 @@ mic -> bridge -> voice stage -> delay line -> phone) with level meters and backl
 
 ## Voices (switch live in the console's Voice dropdown)
 
-`voices/catalog.json` lists the voices: `off` (your own voice, in sync), `karen` (RVC), generic `girl` / `guy` (CMU
-ARCTIC slt / bdl, free for any purpose incl. commercial; Seed-VC from a 20 s clip until RVC models are trained). A
+`voices/catalog.json` lists the voices: `off` (your own voice, in sync), `karen`, generic `girl` / `guy` - all RVC.
+The generic ones are our own models (Karen's recipe, `tools/rvc_train/train_generic_voice.sh`) trained on VCTK
+speakers p300 (American female) / p345 (American male), **CC BY 4.0: credit "CSTR VCTK Corpus (University of
+Edinburgh), CC BY 4.0" wherever these voices are used** (e.g. the stream description). Models: private HF repo
+`voices/<name>/v1`, fetched by `tools/rvc_live/get_voice.py --all` (also run by `cloud/infra/voice_up.sh`). A
 character's `voice.kind`: `rvc` (trained model), `seedvc` (zero-shot from a 1-30 s clip, `reference_clip`) or `none`.
 Only one voice server runs on the GPU box at a time; switching unloads the old one (muted ~10-25 s meanwhile).
 Seed-VC on a box: `POD_FILE=cloud/infra/.pod.joyai bash tools/seedvc_live/setup_box.sh` (GPL-3.0 code).

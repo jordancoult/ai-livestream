@@ -1,7 +1,7 @@
 """Fetch an RVC voice from our private Hugging Face artifacts repo into models/rvc/<name>/ (skips files already there).
 
   python tools/rvc_live/get_voice.py karen voices/karen/v3        (HF token: HF_TOKEN or the huggingface cache login)
-  python tools/rvc_live/get_voice.py --all                         every character's voice (characters/*/character.json)
+  python tools/rvc_live/get_voice.py --all                         every character's voice + every voice in voices/catalog.json
 """
 import argparse
 import json
@@ -40,9 +40,17 @@ if __name__ == "__main__":
     ap.add_argument("--all", action="store_true")
     a = ap.parse_args()
     if a.all:
+        seen = set()
         for c in sorted((ROOT / "characters").glob("*/character.json")):
-            v = json.loads(c.read_text())["voice"]
-            if v.get("hf"):
-                fetch(c.parent.name, v["hf"])
+            v = json.loads(c.read_text()).get("voice", {})
+            if v.get("hf") and v["hf"] not in seen:
+                seen.add(v["hf"])
+                fetch(Path(v["model"]).parent.name if v.get("model") else c.parent.name, v["hf"])
+        cat = ROOT / "voices" / "catalog.json"   # + the live-switchable voices (console Voice dropdown)
+        if cat.exists():
+            for k, v in json.loads(cat.read_text()).items():
+                if not k.startswith("_") and v.get("hf") and v["hf"] not in seen:
+                    seen.add(v["hf"])
+                    fetch(Path(v["model"]).parent.name, v["hf"])
     else:
         fetch(a.name, a.hf_dir)

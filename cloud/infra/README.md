@@ -65,6 +65,7 @@ bash cloud/infra/vast.sh start 62741894          # if the host's GPU was taken m
                                                  # rent a new box instead (box_trial.sh) and re-run the three setups
 bash cloud/infra/vast.sh show                    # new IP/port after a restart -> update cloud/infra/.pod.joyai
 bash cloud/infra/bring_up.sh joyai               # (re)starts the JoyAI server (the install is kept)
+bash cloud/infra/voice_up.sh joyai               # voice server + fetches every voice (Karen, generic girl/guy RVC)
 POD_FILE=cloud/infra/.pod.joyai bash cloud/infra/tunnel.sh start
 cloud/facefix/.venv/bin/python tools/character_console.py   # -> http://127.0.0.1:8780, Start
 ```
